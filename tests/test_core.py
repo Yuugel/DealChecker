@@ -439,3 +439,69 @@ async def test_scheduler_survives_tick_error():
     await asyncio.sleep(.01)
     assert scheduler._task is not None and not scheduler._task.done()
     await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_replayed_source_timestamp_is_one_observation_across_restart(tmp_path):
+    path = tmp_path / "x.db"
+    db = Database(path)
+    row = db.create_watch(watch(target_cents=1500))
+    fixed = offer(1000, checked_at=time.time())
+    engine = Engine(db, {"synthetic": Adapter([fixed])})
+    for _ in range(4):
+        assert (await engine.check_watch(row["id"]))["status"] == "ok"
+    offer_id = db.list_offers(row["id"])[0]["id"]
+    assert len(db.history(offer_id)) == 1
+    assert len(db.list_events()) == 1
+    await engine.close()
+    db.close()
+    reopened = Database(path)
+    assert reopened.schema_version >= 2
+    assert len(reopened.history(offer_id)) == 1
+    reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_one_outbox_delivery_per_pass(tmp_path):
+    class Notifier:
+        def __init__(self):
+            self.sent = []
+        async def send(self, event):
+            self.sent.append(event["product"])
+
+    db = Database(tmp_path / "x.db")
+    db.update_settings({"notification_enabled": True})
+    for number in range(3):
+        row = db.create_watch(watch(name=f"Synthetic {number}", target_cents=1500))
+        item = offer().model_copy(update={"name": f"Synthetic {number}"})
+        db.record_check(row["id"], [(item, "Wunschpreis erreicht", None, None, "Wunschpreis erreicht")],
+                        "ok", None, time.time())
+    notifier = Notifier()
+    engine = Engine(db, {}, notifier)
+    await engine.flush_outbox()
+    assert len(notifier.sent) == 1
+    assert len(db.due_outbox()) == 2
+    await engine.flush_outbox()
+    assert len(notifier.sent) == 2
+    await engine.close()
+
+
+def test_version_one_migration_deduplicates_old_replays(tmp_path):
+    path = tmp_path / "old.db"
+    db = Database(path)
+    row = db.create_watch(watch())
+    timestamp = time.time()
+    db.record_check(row["id"], [(offer(checked_at=timestamp), "Unzureichende Daten", None, None, None)],
+                    "ok", None, timestamp)
+    offer_id = db.list_offers(row["id"])[0]["id"]
+    with db.conn:
+        db.conn.execute("DROP INDEX IF EXISTS observations_unique_time")
+        db.conn.execute("PRAGMA user_version=1")
+        db.conn.execute("INSERT INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) "
+                        "SELECT offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance "
+                        "FROM observations WHERE offer_id=?", (offer_id,))
+    db.close()
+    reopened = Database(path)
+    assert reopened.schema_version == 2
+    assert len(reopened.history(offer_id)) == 1
+    reopened.close()

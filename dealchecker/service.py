@@ -177,7 +177,7 @@ class Engine:
         if not self.notifier or not self.db.get_settings()["notification_enabled"]:
             return
         async with self._delivery_lock:
-            for event in self.db.due_outbox():
+            for event in self.db.due_outbox(limit=1):
                 try:
                     await asyncio.wait_for(self.notifier.send(event), timeout=15)
                 except Exception:

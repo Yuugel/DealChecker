@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .models import Offer, WatchInput
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 INTERVALS = {"critical": 300, "high": 900, "normal": 1800, "low": 3600}
 
 
@@ -59,6 +59,17 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
                     next_due REAL NOT NULL, last_error TEXT);
                 PRAGMA user_version=1;
+                COMMIT;
+                """)
+            version = 1
+        if version < 2:
+            self.conn.executescript("""
+                BEGIN IMMEDIATE;
+                DELETE FROM observations WHERE id NOT IN (
+                    SELECT MIN(id) FROM observations GROUP BY offer_id, checked_at
+                );
+                CREATE UNIQUE INDEX observations_unique_time ON observations(offer_id,checked_at);
+                PRAGMA user_version=2;
                 COMMIT;
                 """)
 
@@ -202,7 +213,7 @@ class Database:
                 else:
                     oid = self.conn.execute("INSERT INTO offers(watch_id,offer_key,data,evaluation,comparison_cents,savings_cents,observed_at) VALUES(?,?,?,?,?,?,?)",
                                             (watch_id, item.key, json.dumps(data), evaluation, comparison, savings, item.checked_at)).lastrowid
-                self.conn.execute("INSERT INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) VALUES(?,?,?,?,?,?,?)",
+                self.conn.execute("INSERT OR IGNORE INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) VALUES(?,?,?,?,?,?,?)",
                                   (oid, item.checked_at, item.price_cents, item.shipping_cents, item.total_cents,
                                    item.availability, item.provenance))
                 if reason and item.total_cents is not None:
@@ -219,10 +230,10 @@ class Database:
             self.conn.execute("UPDATE watches SET next_due=?,failure_count=?,last_error=?,last_checked=? WHERE id=?",
                               (checked_at + delay, failure, error, checked_at, watch_id))
 
-    def due_outbox(self, now: float | None = None) -> list[dict]:
+    def due_outbox(self, now: float | None = None, limit: int = 20) -> list[dict]:
         now = time.time() if now is None else now
         return [{"id": r["id"], **json.loads(r["data"])} for r in self.conn.execute(
-            "SELECT b.id,e.data FROM outbox b JOIN events e ON e.id=b.event_id WHERE b.status='pending' AND b.next_due<=? ORDER BY b.id LIMIT 20", (now,))]
+            "SELECT b.id,e.data FROM outbox b JOIN events e ON e.id=b.event_id WHERE b.status='pending' AND b.next_due<=? ORDER BY b.id LIMIT ?", (now, limit))]
 
     def outbox_result(self, id: int, error: str | None):
         with self.conn:
