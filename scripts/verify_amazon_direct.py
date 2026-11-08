@@ -59,8 +59,12 @@ async def run(output):
                 await client.close()
                 db.close()
         assert all(c['status'] in ('ok', 'partial') and c['offers'] > 0 for c in report['checks'])
-        assert len(report['histories']) == 3
-        assert all(len(h) == 2 for h in report['histories'].values())
+        # A real seller/price-basis change legitimately splits an offer history.
+        # Verify persisted observations per watch instead of assuming stable keys.
+        counts = {watch_id: sum(len(report['histories'][str(o['id'])]) for o in report['offers']
+                               if o['watch_id'] == watch_id) for watch_id in watch_ids}
+        report['observations_per_watch'] = counts
+        assert all(count == 2 for count in counts.values())
         assert report['sqlite_integrity'] == 'ok'
     finally:
         report['finished_at'] = datetime.now(timezone.utc).isoformat()
