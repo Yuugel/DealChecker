@@ -8,7 +8,7 @@ from .models import Offer, WatchInput
 from .identity import comparison_identity
 from .scheduling import OLD_DEFAULTS, interval, interval_pair
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 FEED_FRESH_SECONDS = 600
 
 
@@ -134,6 +134,28 @@ class Database:
             try:
                 self.conn.execute("ALTER TABLE watch_sources ADD COLUMN pending_refresh INTEGER NOT NULL DEFAULT 0")
                 self.conn.execute("PRAGMA user_version=6")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            version = 6
+        if version < 7:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                old_exact = {"normal": (7200, 1800), "high": (2700, 600),
+                             "critical": (1800, 300), "low": (28800, 3600)}
+                for row in self.conn.execute("SELECT id,data FROM watches"):
+                    data = json.loads(row["data"])
+                    pair = (28800, 10800) if data["kind"] == "discovery" else old_exact[data["priority"]]
+                    if data.get("interval_seconds") is None:
+                        data["interval_seconds"] = pair[0]
+                    if data.get("black_friday_interval_seconds") is None:
+                        data["black_friday_interval_seconds"] = pair[1]
+                    data.setdefault("sellers_include", [])
+                    data.setdefault("sellers_exclude", [])
+                    data.setdefault("reference_max_price_cents", None)
+                    self.conn.execute("UPDATE watches SET data=? WHERE id=?", (json.dumps(data), row["id"]))
+                self.conn.execute("PRAGMA user_version=7")
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()

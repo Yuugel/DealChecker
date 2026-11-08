@@ -1,10 +1,12 @@
 """Bounded, single-flight watch checks and observed-price evaluation."""
 import asyncio
+import re
 import statistics
 import time
 
 from .db import Database, FEED_FRESH_SECONDS, interval
 from .models import Offer, WatchInput
+from .identity import canonical_gtin
 
 SOURCE_CHECK_TIMEOUT = 60
 
@@ -14,10 +16,16 @@ def _contains(text: str, term: str) -> bool:
 
 
 def _matches(watch: WatchInput, offer: Offer) -> bool:
+    if watch.gtin:
+        expected_gtin = canonical_gtin(watch.gtin)
+        if not offer.gtin:
+            raise ValueError('source does not provide requested gtin')
+        if expected_gtin is None or canonical_gtin(offer.gtin) != expected_gtin:
+            return False
     if watch.kind == "exact":
         if watch.product_id and offer.product_id.casefold() != watch.product_id.casefold():
             return False
-        for field in ("gtin", "model", "variant"):
+        for field in ("model", "variant"):
             expected = getattr(watch, field)
             actual = getattr(offer, field)
             if expected:
@@ -30,7 +38,10 @@ def _matches(watch: WatchInput, offer: Offer) -> bool:
                 return False
     else:
         terms = [watch.query, *watch.synonyms]
-        if not any(_contains(" ".join((offer.name, offer.model, offer.manufacturer, offer.category)), t) for t in terms):
+        tokens = set(re.findall(r'\w+', ' '.join((offer.name, offer.model, offer.manufacturer, offer.category, offer.variant)).casefold()))
+        if not any((canonical_gtin(t) is not None and canonical_gtin(t) == canonical_gtin(offer.gtin))
+                   or (bool(re.findall(r'\w+', t)) and set(re.findall(r'\w+', t.casefold())).issubset(tokens))
+                   for t in terms):
             return False
     if watch.manufacturer and not _contains(offer.manufacturer, watch.manufacturer):
         return False
@@ -42,6 +53,12 @@ def _matches(watch: WatchInput, offer: Offer) -> bool:
         return False
     if any(_contains(offer.merchant, x) for x in watch.merchants_exclude):
         return False
+    if watch.sellers_include and not any(_contains(offer.seller, x) for x in watch.sellers_include):
+        return False
+    if any(_contains(offer.seller, x) for x in watch.sellers_exclude):
+        return False
+    if offer.offer_type == 'reference' and watch.reference_max_price_cents is not None:
+        return offer.price_cents <= watch.reference_max_price_cents
     if watch.max_price_cents is not None and (offer.total_cents is None or offer.total_cents > watch.max_price_cents):
         return False
     return True

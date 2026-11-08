@@ -68,8 +68,8 @@ def test_adaptive_cadence_and_source_precedence(monkeypatch):
     week = {"black_friday_until": clock[0] + 3600}
     assert interval(watch(kind="discovery", priority="critical").model_dump(), normal) == 28800
     assert interval(watch(kind="discovery", priority="critical").model_dump(), week) == 10800
-    assert interval(watch(kind="exact", priority="normal").model_dump(), normal) == 7200
-    assert interval(watch(kind="exact", priority="normal").model_dump(), week) == 1800
+    assert interval(watch(kind="exact", priority="normal").model_dump(), normal) == 25200
+    assert interval(watch(kind="exact", priority="normal").model_dump(), week) == 2700
     assert interval(watch(kind="exact", priority="high").model_dump(), week) == 600
     assert interval(watch(kind="exact", priority="critical").model_dump(), week) == 300
     assert interval(watch(kind="exact", priority="low").model_dump(), week) == 3600
@@ -97,7 +97,7 @@ def test_legacy_watch_cadence_migrates_without_replacing_due(tmp_path):
     db.close()
     reopened = Database(path)
     migrated = reopened.get_watch(row["id"])
-    assert reopened.schema_version == 6
+    assert reopened.schema_version == 7
     assert migrated["interval_seconds"] == 1800
     assert migrated["black_friday_interval_seconds"] == 900
     assert migrated["next_due"] == old_due
@@ -122,7 +122,7 @@ def test_schema_five_migration_rolls_back_when_copy_fails(tmp_path, monkeypatch)
         assert raw.execute("PRAGMA user_version").fetchone()[0] == 4
         assert "min_interval_seconds" not in {column[1] for column in raw.execute("PRAGMA table_info(watch_sources)")}
     reopened = Database(path)
-    assert reopened.schema_version == 6
+    assert reopened.schema_version == 7
     reopened.close()
 
 
@@ -130,7 +130,7 @@ def test_black_week_reschedules_healthy_with_source_floor_without_accelerating_f
     clock = [1_800_000_000.0]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "week.db")
-    row = db.create_watch(watch(kind="exact", source_ids=["a", "b"]))
+    row = db.create_watch(watch(kind="exact", source_ids=["a", "b"], interval_seconds=7200, black_friday_interval_seconds=1800))
     db.record_check(row["id"], [], "error", "b: fixture failure", clock[0],
                     source_outcomes={"a": (None, 3600), "b": ("fixture failure", 0)})
     before = db.source_schedules(row["id"])
@@ -148,7 +148,7 @@ def test_black_week_expiry_restores_normal_due_without_early_retry(tmp_path, mon
     clock = [1_800_000_000.0]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "expiry.db")
-    row = db.create_watch(watch(kind="exact", source_ids=["a"]))
+    row = db.create_watch(watch(kind="exact", source_ids=["a"], interval_seconds=7200, black_friday_interval_seconds=1800))
     db.update_settings({"black_friday_until": clock[0] + 600})
     db.record_check(row["id"], [], "ok", None, clock[0])
     assert db.get_watch(row["id"])["next_due"] == clock[0] + 1800
@@ -163,7 +163,7 @@ def test_black_week_expiry_keeps_failure_backoff_and_error(tmp_path, monkeypatch
     clock = [1_800_000_000.0]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "failed-expiry.db")
-    row = db.create_watch(watch(kind="exact", source_ids=["a"]))
+    row = db.create_watch(watch(kind="exact", source_ids=["a"], interval_seconds=7200, black_friday_interval_seconds=1800))
     db.update_settings({"black_friday_until": clock[0] + 600})
     db.record_check(row["id"], [], "error", "a: unavailable", clock[0],
                     source_outcomes={"a": ("unavailable", 0)})
@@ -180,7 +180,7 @@ def test_edited_query_due_survives_black_week_expiry(tmp_path, monkeypatch):
     clock = [1_800_000_000.0]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "edit-expiry.db")
-    original = watch(kind="exact", source_ids=["a"], query="Old")
+    original = watch(kind="exact", source_ids=["a"], query="Old", interval_seconds=7200, black_friday_interval_seconds=1800)
     row = db.create_watch(original)
     db.update_settings({"black_friday_until": clock[0] + 600})
     db.record_check(row["id"], [], "ok", None, clock[0])
@@ -200,7 +200,7 @@ def test_interval_edit_recalculates_due_without_clearing_failure(tmp_path, monke
     clock = [1_800_000_000.0]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "edit.db")
-    original = watch(kind="exact")
+    original = watch(kind="exact", interval_seconds=7200, black_friday_interval_seconds=1800)
     row = db.create_watch(original)
     db.record_check(row["id"], [], "error", "b: failure", clock[0],
                     source_outcomes={"a": (None, 0), "b": ("failure", 0)})

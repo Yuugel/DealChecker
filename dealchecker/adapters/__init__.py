@@ -20,8 +20,10 @@ def build_registry(client, feeds: list[dict] | None = None) -> dict:
 
 
 def source_catalog(registry: dict) -> list[dict]:
+    from dealchecker.links import url_hosts
     return [
         {"id": adapter.id, "name": adapter.name, "description": adapter.description,
-         "min_interval_seconds": adapter.min_interval_seconds, "configured": True}
+         "min_interval_seconds": adapter.min_interval_seconds, "configured": True,
+         "supports_search": getattr(adapter, 'supports_search', True), "url_hosts": list(url_hosts(adapter))}
         for adapter in registry.values()
     ]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 from pathlib import Path
 import time
 
@@ -20,6 +21,7 @@ from .notifications import DiscordNotifier
 from .scheduler import Scheduler
 from .security import LocalOnlyMiddleware
 from .service import Engine
+from .links import resolve_link
 
 
 class SettingsPatch(BaseModel):
@@ -27,6 +29,11 @@ class SettingsPatch(BaseModel):
     paused: StrictBool | None = None
     black_friday_until: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     notification_enabled: StrictBool | None = None
+
+
+class LinkInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    url: str = Field(min_length=1, max_length=1000)
 
 
 def create_app(config: Config | None = None, *, adapters=None, start_scheduler=True):
@@ -60,6 +67,7 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
     app.add_middleware(LocalOnlyMiddleware)
     static = Path(__file__).parent / 'static'
     app.mount('/static', StaticFiles(directory=static, check_dir=False), name='static')
+    link_slots = asyncio.Semaphore(4)
 
     @app.get('/')
     async def index():
@@ -91,6 +99,16 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
     def validate_sources(watch):
         if any(s not in app.state.registry for s in watch.source_ids):
             raise HTTPException(422, 'Eine gewählte Quelle ist nicht konfiguriert')
+        if watch.kind == 'discovery' and any(not getattr(app.state.registry[s], 'supports_search', True) for s in watch.source_ids):
+            raise HTTPException(422, 'Eine gewählte Quelle unterstützt nur Produktlinks, keine freie Suche.')
+
+    @app.post('/api/links/resolve')
+    async def link_preview(payload: LinkInput):
+        try:
+            async with link_slots:
+                return await resolve_link(payload.url.strip(), app.state.registry)
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise HTTPException(422, str(exc)[:300]) from None
 
     @app.post('/api/watches', status_code=201)
     async def add_watch(watch: WatchInput):
