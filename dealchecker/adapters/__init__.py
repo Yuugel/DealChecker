@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from .apple import AppleAdapter
 from .feed import FeedAdapter
+from .modula24 import Modula24Adapter
 
 
 def build_registry(client, feeds: list[dict] | None = None) -> dict:
-    registry = {"apple": AppleAdapter(client)}
+    registry = {"apple": AppleAdapter(client), "modula24": Modula24Adapter(client)}
     for config in feeds or []:
         adapter = FeedAdapter(client, config)
         if adapter.id in registry:

@@ -89,3 +89,18 @@ async def test_post_204_does_not_require_json_and_errors_do_not_leak_url():
         await client.post_json('https://discord.com/api/webhooks/123/SECRET', {})
     assert 'SECRET' not in str(exc.value)
     await client.close()
+
+
+async def test_larger_body_limit_requires_explicit_bounded_opt_in():
+    body = json.dumps({"padding": "x" * (2 * 1024 * 1024)}).encode()
+    client = SafeHttpClient(min_interval=0)
+    client._session = Session([Response(body=body), Response(body=body)])
+    with pytest.raises(ValueError, match="Limit"):
+        await client.get_json('https://modula24.com/feeds/products.de.json', allowed_hosts={'modula24.com'})
+    result = await client.get_json('https://modula24.com/feeds/products.de.json',
+                                   allowed_hosts={'modula24.com'}, max_body=4 * 1024 * 1024)
+    assert len(result['padding']) == 2 * 1024 * 1024
+    with pytest.raises(ValueError, match="Limit"):
+        await client.get_json('https://modula24.com/feeds/products.de.json', max_body=9 * 1024 * 1024)
+    assert len(client._session.calls) == 2
+    await client.close()
