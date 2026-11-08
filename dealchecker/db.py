@@ -172,13 +172,11 @@ class Database:
             args = (watch_id,)
         sql += " ORDER BY o.observed_at DESC,o.id DESC"
         now = time.time()
-        statuses = self.source_statuses()
         result = []
         for r in self.conn.execute(sql, args):
             data = json.loads(r["data"])
             watch = json.loads(r["watch_data"])
-            source_error = statuses.get(data["source"], {}).get("last_error")
-            stale = (source_error is not None or r["seen_at"] < r["last_checked"]
+            stale = (r["seen_at"] < r["last_checked"]
                      or now >= r["next_due"] or data.get("quality") == "feed_stale"
                      or (data.get("provenance") == "feed" and now - r["observed_at"] > FEED_FRESH_SECONDS)
                      or now - r["observed_at"] > 2 * interval(watch, self.get_settings()))

@@ -594,6 +594,26 @@ async def test_partial_failure_stales_only_failed_source(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_source_error_on_other_watch_keeps_healthy_offer_fresh(tmp_path):
+    class WatchSpecific(Adapter):
+        async def lookup(self, watch):
+            if watch.gtin:
+                raise ValueError("GTIN unsupported")
+            return [offer()]
+
+    db = Database(tmp_path / "shared-source.db")
+    good = db.create_watch(watch())
+    bad = db.create_watch(watch(gtin="123"))
+    engine = Engine(db, {"synthetic": WatchSpecific()})
+    assert (await engine.check_watch(good["id"]))["status"] == "ok"
+    assert db.list_offers(good["id"])[0]["stale"] is False
+    assert (await engine.check_watch(bad["id"]))["status"] == "error"
+    assert "GTIN unsupported" in db.source_statuses()["synthetic"]["last_error"]
+    assert db.list_offers(good["id"])[0]["stale"] is False
+    await engine.close()
+
+
+@pytest.mark.asyncio
 async def test_filtered_out_offer_becomes_stale_after_successful_check(tmp_path):
     db = Database(tmp_path / "filtered.db")
     row = db.create_watch(watch(kind="discovery", query="Synthetic", max_price_cents=1500))
