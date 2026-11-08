@@ -259,3 +259,32 @@ async def test_reef_gateway_rejects_sample_even_with_fresh_timestamp():
     gateway = ReefGateway(SamplePages({DETAIL: product()}), Settings())
     with pytest.raises(ValueError, match="Live"):
         await gateway.request(DETAIL, {"asin": ASIN})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant_data", [
+    {"variations": [{"color": "Blue", "price": 29.90}, {"color": "Red", "price": 59.90}]},
+    {"variation_count": 2},
+])
+async def test_ebay_detail_does_not_use_listing_price_for_an_unverified_variant(variant_data):
+    from dealchecker.adapters.reef import EbayReefAdapter
+
+    item = listing(price={"value": 29.9, "currency": "EUR"}, **variant_data)
+    adapter = EbayReefAdapter(ReefGateway(Pages({EBAY_DETAIL: {"item": item}}), Settings()))
+    watch = WatchInput(name="Example Gamepad", url=EBAY_LINK, source_ids=["ebay"])
+    with pytest.raises(ValueError, match="Variante"):
+        await adapter.lookup(watch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auction_evidence", [
+    {"auction": True}, {"type": "Auction"}, {"bid_count": 3}, {"bids": "2"}, {"time_left": "Endet in 3 Stunden"},
+])
+async def test_ebay_quantity_does_not_override_auction_signals(auction_evidence):
+    from dealchecker.adapters.reef import EbayReefAdapter
+
+    item = listing(buying_format="", quantity_available=3, **auction_evidence)
+    adapter = EbayReefAdapter(ReefGateway(Pages({EBAY_DETAIL: {"item": item}}), Settings()))
+    watch = WatchInput(name="Example Gamepad", url=EBAY_LINK, source_ids=["ebay"])
+    with pytest.raises(ValueError, match="Sofortkauf"):
+        await adapter.lookup(watch)

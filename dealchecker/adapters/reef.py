@@ -349,6 +349,29 @@ def _ebay_buying_format(item: dict) -> str:
 _FIXED_PRICE = {"buy_it_now", "fixed_price", "sofort-kaufen", "buy it now"}
 
 
+def _positive_count(value: object) -> bool:
+    if isinstance(value, str):
+        value = value.strip()
+        return value.isascii() and value.isdecimal() and bool(value.lstrip("0"))
+    return type(value) in (int, float) and value > 0
+
+
+def _ebay_has_auction_signals(item: dict, buying_format: str) -> bool:
+    formats = " ".join(_text(item.get(field)).casefold()
+                       for field in ("buying_format", "buying_format_code", "type", "listing_type"))
+    bids = item.get("bids")
+    return (
+        any(marker in formats for marker in ("auction", "auktion", "gebot", " bids"))
+        or item.get("auction") is True
+        or item.get("is_auction") is True
+        or item.get("current_bid") is not None
+        or _positive_count(item.get("bid_count"))
+        or _positive_count(bids)
+        or (isinstance(bids, list) and bool(bids))
+        or (buying_format not in _FIXED_PRICE and bool(_text(item.get("time_left"))))
+    )
+
+
 class EbayReefAdapter(Adapter):
     id = "ebay"
     name = "eBay (ReefAPI)"
@@ -428,8 +451,11 @@ class EbayReefAdapter(Adapter):
         if (not isinstance(item, dict) or item.get("item_id") != item_id
                 or _ebay_listing_id(item.get("url")) != item_id):
             raise ValueError("ReefAPI-Angebot widerspricht der angefragten eBay-Artikelnummer")
+        if (item.get("variations") or item.get("has_variations") is True
+                or _positive_count(item.get("variation_count")) or _positive_count(item.get("variant_count"))):
+            raise ValueError("ReefAPI liefert keinen eindeutigen Preis für eine einzelne eBay-Variante")
         buying_format = _ebay_buying_format(item)
-        if "auction" in buying_format or "auktion" in buying_format or item.get("current_bid") is not None:
+        if _ebay_has_auction_signals(item, buying_format):
             raise ValueError("eBay-Auktion liefert keinen bestätigten Sofortkaufpreis")
         # eBay limits multi-quantity listings of identical items to fixed-price format.
         quantity = item.get("quantity_available")
