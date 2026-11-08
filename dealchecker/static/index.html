@@ -40,6 +40,12 @@
         <button class="button button-primary" id="new-watch-button" type="button"><span aria-hidden="true">＋</span> Neue Beobachtung</button>
       </section>
 
+      <section class="quick-add" aria-label="Produkt schnell hinzufügen">
+        <div><strong>Schnell hinzufügen</strong><small>Produktname für passende Treffer oder Produktlink zur direkten Auflösung.</small></div>
+        <form id="quick-name-form" class="quick-add-form"><label class="sr-only" for="quick-name">Produktname suchen</label><input id="quick-name" maxlength="160" placeholder="Produktname …"><button class="button button-secondary" type="submit">Treffer suchen</button></form>
+        <form id="quick-url-form" class="quick-add-form"><label class="sr-only" for="quick-url">Produktlink auflösen</label><input id="quick-url" type="url" maxlength="2048" placeholder="Produktlink einfügen …"><button class="button button-primary" type="submit">Link prüfen</button></form>
+      </section>
+
       <section class="coverage-banner" aria-label="Quellenabdeckung">
         <div class="coverage-icon" aria-hidden="true">◌</div>
         <div class="coverage-copy"><strong>Quellenabdeckung</strong><span>Apple App Store DE: App-Kaufpreise ohne Abos/In-App-Käufe. Modula24: Möbelteile und Zubehör; Versand für ein Stück nach Deutschland, soweit im Feed angegeben. Bestenvergleich: Referenzpreise für Elektronik und Haushaltsgeräte ohne Händlerangebot.</span></div>
@@ -99,11 +105,12 @@
           <label class="field">Hersteller<input id="watch-manufacturer" maxlength="120"></label>
           <label class="field field-wide">Synonyme <small>Kommagetrennt · gelten zusätzlich zur Suchanfrage</small><textarea id="watch-synonyms" rows="2" maxlength="1000"></textarea></label>
           <label class="field field-wide">Ausschließen <small>Kommagetrennte Begriffe</small><textarea id="watch-exclusions" rows="2" maxlength="1000"></textarea></label>
-          <label class="field">Händler einschließen <small>Kommagetrennt</small><textarea id="watch-merchants-include" rows="2" maxlength="1000"></textarea></label>
-          <label class="field">Händler ausschließen <small>Kommagetrennt</small><textarea id="watch-merchants-exclude" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Verkäufer einschließen <small>Kommagetrennt</small><textarea id="watch-merchants-include" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Verkäufer ausschließen <small>Kommagetrennt</small><textarea id="watch-merchants-exclude" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Referenzbudget in EUR<input id="watch-reference-max" inputmode="decimal" placeholder="z. B. 250,00"><small>Vergleicht nur den Artikelpreis mit Referenzen; löst keinen Kaufalarm aus.</small></label>
           <label class="field">Wunschpreis in EUR<input id="watch-target" inputmode="decimal" placeholder="z. B. 4,99"></label>
-          <label class="field">Preislimit in EUR<input id="watch-max" inputmode="decimal" placeholder="z. B. 9,99"><small>Gilt für Gesamtpreise. Referenzen ohne Versand werden ausgefiltert.</small></label>
-          <label class="field">Priorität<select id="watch-priority"><option value="critical">Kritisch</option><option value="high">Hoch</option><option value="normal" selected>Normal</option><option value="low">Niedrig</option></select><small>Exakt: normal 2 Std., hoch 45 Min., kritisch 30 Min. Entdecken: 8 Std. Quellenlimits gehen vor.</small></label>
+          <label class="field">Preislimit in EUR<input id="watch-max" inputmode="decimal" placeholder="z. B. 9,99"><small>Gilt für Gesamtpreise von Händlerangeboten. Referenzpreise separat über das Referenzbudget.</small></label>
+          <label class="field">Priorität<select id="watch-priority"><option value="critical">Kritisch</option><option value="high">Hoch</option><option value="normal" selected>Normal</option><option value="low">Niedrig</option></select><small>Exakt: normal 7 Std., hoch 45 Min., kritisch 30 Min. Entdecken: normal 45 Min., hoch 10 Min., kritisch 5 Min. Quellenlimits gehen vor.</small></label>
           <label class="field">Normales Prüfintervall in Sekunden<input id="watch-interval" type="number" min="300" max="86400" step="1" placeholder="Automatisch nach Typ und Priorität"><small>Leer lassen für den Standard dieses Beobachtungstyps.</small></label>
           <label class="field">Black-Friday-Intervall in Sekunden<input id="watch-bf-interval" type="number" min="300" max="86400" step="1" placeholder="Automatisch nach Typ und Priorität"><small>Optional; 300 bis 86400 Sekunden.</small></label>
           <fieldset class="field field-wide source-interval-field"><legend>Quellenspezifische Intervalle <small>Optional; leer = normales Intervall übernehmen</small></legend><div id="source-interval-options" class="source-interval-options"></div></fieldset>
@@ -113,6 +120,12 @@
       <div class="form-error" id="watch-form-error" role="alert"></div>
       <div class="modal-actions"><button type="button" class="button button-quiet close-dialog">Abbrechen</button><button type="submit" class="button button-primary" id="watch-save">Beobachtung speichern</button></div>
     </form>
+  </dialog>
+
+  <dialog id="resolve-dialog" class="modal resolve-modal" aria-labelledby="resolve-title">
+    <div class="modal-heading"><div><p class="eyebrow">LINK AUFLÖSEN</p><h2 id="resolve-title">Gefundene Produkte</h2><p id="resolve-source" class="section-note"></p></div><button type="button" class="icon-button close-dialog" aria-label="Dialog schließen">×</button></div>
+    <div id="resolve-results" class="resolve-results" aria-live="polite"></div>
+    <div class="modal-actions"><button type="button" class="button button-quiet close-dialog">Schließen</button></div>
   </dialog>
 
   <dialog id="history-dialog" class="modal history-modal" aria-labelledby="history-title">

@@ -7,6 +7,7 @@
   const API = '/api';
   const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
   const dialog = byId('watch-dialog');
+  const resolveDialog = byId('resolve-dialog');
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -205,6 +206,7 @@
       if (watch.last_error) left.append(el('span', 'meta-item stale', `Letzter Fehler: ${watch.last_error}`));
       if (watch.target_cents != null) left.append(el('span', 'meta-item', `Wunschpreis ${fmtMoney(watch.target_cents)}`));
       if (watch.max_price_cents != null) left.append(el('span', 'meta-item', `Limit ${fmtMoney(watch.max_price_cents)}`));
+      if (watch.reference_max_price_cents != null) left.append(el('span', 'meta-item', `Referenzbudget ${fmtMoney(watch.reference_max_price_cents)} · Artikelpreis`));
       const right = el('div', 'meta-right');
       if (offer) {
         right.append(el('span', 'meta-item', offer.merchant ? `Quelle: ${offer.merchant}` : `Quelle: ${offer.source || 'Unbekannt'}`));
@@ -425,9 +427,11 @@
     }
     for (const source of available) {
       const label = el('label', 'source-check');
+      const discovery = $('input[name="watch-kind"][value="discovery"]')?.checked;
+      if (discovery && source.supports_search === false && !selected.includes(source.id)) continue;
       const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = source.configured === false && !selected.includes(source.id);
       input.addEventListener('change', () => renderSourceIntervalOptions());
-      label.append(input, document.createTextNode(source.name || source.id)); root.append(label);
+      label.append(input, document.createTextNode(`${source.name || source.id}${source.supports_search === false ? ' · nur Link' : ''}`)); root.append(label);
     }
     if (!sources.length) root.append(el('span', 'field-help', 'Der Dienst meldet noch keine verfügbaren Quellen.'));
     renderSourceIntervalOptions();
@@ -474,10 +478,11 @@
       byId('watch-manufacturer').value = watch.manufacturer || '';
       byId('watch-synonyms').value = (watch.synonyms || []).join(', ');
       byId('watch-exclusions').value = (watch.exclusions || []).join(', ');
-      byId('watch-merchants-include').value = (watch.merchants_include || []).join(', ');
-      byId('watch-merchants-exclude').value = (watch.merchants_exclude || []).join(', ');
+      byId('watch-merchants-include').value = (watch.sellers_include || watch.merchants_include || []).join(', ');
+      byId('watch-merchants-exclude').value = (watch.sellers_exclude || watch.merchants_exclude || []).join(', ');
       byId('watch-target').value = watch.target_cents == null ? '' : (watch.target_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-max').value = watch.max_price_cents == null ? '' : (watch.max_price_cents / 100).toFixed(2).replace('.', ',');
+      byId('watch-reference-max').value = watch.reference_max_price_cents == null ? '' : (watch.reference_max_price_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-priority').value = watch.priority || 'normal';
       byId('watch-interval').value = watch.interval_seconds == null ? '' : watch.interval_seconds;
       byId('watch-bf-interval').value = watch.black_friday_interval_seconds == null ? '' : watch.black_friday_interval_seconds;
@@ -488,7 +493,7 @@
       buildSourceOptions(state.data?.sources || [], ['apple']);
     }
     if (offer) {
-      const sourceId = String(offer.source || '');
+      const sourceId = String(offer.source || offer.source_id || '');
       byId('watch-dialog-title').textContent = 'Angebot exakt beobachten';
       byId('watch-name').value = offer.name || '';
       const exact = $('input[name="watch-kind"][value="exact"]'); if (exact) exact.checked = true;
@@ -507,6 +512,7 @@
   function getWatchPayload() {
     const target = moneyInputToCents(byId('watch-target').value, 'Wunschpreis');
     const max = moneyInputToCents(byId('watch-max').value, 'Preislimit');
+    const referenceMax = moneyInputToCents(byId('watch-reference-max').value, 'Referenzbudget');
     const rawInterval = byId('watch-interval').value.trim();
     const interval = rawInterval ? Number(rawInterval) : null;
     if (interval !== null && (!Number.isSafeInteger(interval) || interval < 300 || interval > 86400)) throw new Error('Prüfintervall muss zwischen 300 und 86400 Sekunden liegen.');
@@ -537,11 +543,46 @@
       product_id: byId('watch-product-id').value.trim(), url,
       gtin: byId('watch-gtin').value.trim(), model: byId('watch-model').value.trim(), variant: byId('watch-variant').value.trim(),
       synonyms: splitList(byId('watch-synonyms').value, 5), category: byId('watch-category').value.trim(), manufacturer: byId('watch-manufacturer').value.trim(),
-      exclusions: splitList(byId('watch-exclusions').value), merchants_include: splitList(byId('watch-merchants-include').value), merchants_exclude: splitList(byId('watch-merchants-exclude').value),
-      target_cents: target, max_price_cents: max,
+      exclusions: splitList(byId('watch-exclusions').value), sellers_include: splitList(byId('watch-merchants-include').value), sellers_exclude: splitList(byId('watch-merchants-exclude').value),
+      target_cents: target, max_price_cents: max, reference_max_price_cents: referenceMax,
       priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
       source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
     };
+  }
+  function openDiscoverySearch(query) {
+    openWatchEditor();
+    byId('watch-name').value = query;
+    byId('watch-query').value = query;
+    const discovery = $('input[name="watch-kind"][value="discovery"]');
+    if (discovery) discovery.checked = true;
+    const sources = (state.data?.sources || []).filter(source => source.configured !== false && source.supports_search === true).map(source => source.id);
+    buildSourceOptions(state.data?.sources || [], sources);
+    if (!sources.length) byId('watch-form-error').textContent = 'Der Dienst meldet derzeit keine eingerichteten Suchquellen.';
+  }
+  function renderResolvedOffers(result) {
+    const root = byId('resolve-results'); root.replaceChildren();
+    byId('resolve-source').textContent = result.source_name || result.source_id || '';
+    for (const warning of (result.warnings || [])) root.append(el('p', 'resolve-warning', warning));
+    const offers = Array.isArray(result.offers) ? result.offers : [];
+    if (!offers.length) root.append(el('p', 'resolve-empty', 'Für diesen Link wurden keine passenden Produkte gefunden.'));
+    offers.forEach(offer => {
+      const card = el('article', 'resolve-card');
+      const title = el('strong', '', offer.name || 'Unbenanntes Produkt');
+      const meta = el('small', '', [offer.seller || offer.merchant || 'Händler unbekannt', offer.price_cents == null ? 'Artikelpreis unbekannt' : fmtMoney(offer.price_cents, offer.currency), offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`].join(' · '));
+      const choose = el('button', 'button button-primary', 'Dieses Produkt beobachten'); choose.type = 'button';
+      choose.addEventListener('click', () => { resolveDialog.close(); openWatchEditor(null, { ...offer, source: offer.source || result.source_id, url: offer.url || byId('quick-url').value.trim() }); });
+      card.append(title, meta, choose); root.append(card);
+    });
+    resolveDialog.showModal();
+  }
+  async function resolveProductUrl(event) {
+    event.preventDefault();
+    const url = byId('quick-url').value.trim();
+    if (!url || !safeHttpUrl(url)) { toast('Bitte einen gültigen HTTP- oder HTTPS-Produktlink eingeben.', 'error'); return; }
+    const button = $('#quick-url-form button'); button.disabled = true;
+    try { renderResolvedOffers(await api('/links/resolve', { method: 'POST', body: { url } })); }
+    catch (error) { toast(error.message, 'error'); }
+    finally { button.disabled = false; }
   }
   async function saveWatch(event) {
     event.preventDefault();
@@ -653,10 +694,13 @@
   }
   function bind() {
     byId('watch-form').addEventListener('submit', saveWatch);
+    byId('quick-name-form').addEventListener('submit', event => { event.preventDefault(); const query = byId('quick-name').value.trim(); if (query) openDiscoverySearch(query); });
+    byId('quick-url-form').addEventListener('submit', resolveProductUrl);
     byId('new-watch-button').addEventListener('click', () => openWatchEditor());
     byId('new-watch-button-secondary').addEventListener('click', () => openWatchEditor());
     $$('.close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog')?.close()));
-    [dialog, byId('history-dialog')].forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) modal.close(); }));
+    [dialog, resolveDialog, byId('history-dialog')].forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) modal.close(); }));
+    $$('input[name="watch-kind"]').forEach(input => input.addEventListener('change', () => buildSourceOptions(state.data?.sources || [], $$('input[name="watch-source"]:checked').map(item => item.value))));
     byId('watch-search').addEventListener('input', event => { state.search = event.target.value; if (state.data) renderWatchList(state.data); });
     byId('refresh-button').addEventListener('click', () => refresh(true));
     byId('activity-refresh').addEventListener('click', () => refresh(true));
