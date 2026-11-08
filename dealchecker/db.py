@@ -5,17 +5,11 @@ import time
 from pathlib import Path
 
 from .models import Offer, WatchInput
+from .identity import comparison_identity
+from .scheduling import OLD_DEFAULTS, interval, interval_pair
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FEED_FRESH_SECONDS = 600
-INTERVALS = {"critical": 300, "high": 900, "normal": 1800, "low": 3600}
-
-
-def interval(watch: dict, settings: dict | None = None) -> int:
-    base = watch.get("interval_seconds") or INTERVALS[watch["priority"]]
-    if settings and settings["black_friday_until"] > time.time():
-        return max(300, base // 2)
-    return base
 
 
 class Database:
@@ -117,6 +111,23 @@ class Database:
             except Exception:
                 self.conn.rollback()
                 raise
+            version = 4
+        if version < 5:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute("ALTER TABLE watch_sources ADD COLUMN min_interval_seconds INTEGER NOT NULL DEFAULT 0")
+                for row in self.conn.execute("SELECT id,data FROM watches"):
+                    data = json.loads(row["data"])
+                    old_normal = data.get("interval_seconds") or OLD_DEFAULTS[data["priority"]]
+                    data["interval_seconds"] = old_normal
+                    data.setdefault("black_friday_interval_seconds", max(300, old_normal // 2))
+                    data.setdefault("source_intervals", {})
+                    self.conn.execute("UPDATE watches SET data=? WHERE id=?", (json.dumps(data), row["id"]))
+                self.conn.execute("PRAGMA user_version=5")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     @property
     def schema_version(self):
@@ -139,7 +150,15 @@ class Database:
         return self.get_watch(cur.lastrowid)
 
     def update_watch(self, id: int, data: WatchInput) -> dict | None:
+        old_watch = self.get_watch(id)
+        if old_watch is None:
+            return None
         now = time.time()
+        schedule_fields = {"interval_seconds", "black_friday_interval_seconds", "source_intervals", "priority", "paused"}
+        old_data = {k: old_watch[k] for k in WatchInput.model_fields}
+        new_data = data.model_dump()
+        changed_query = any(old_data[k] != new_data[k] for k in old_data if k not in schedule_fields)
+        settings = self.get_settings()
         with self.conn:
             cur = self.conn.execute("UPDATE watches SET data=?,next_due=? WHERE id=?",
                                     (data.model_dump_json(), now, id))
@@ -149,13 +168,17 @@ class Database:
                 for source in data.source_ids:
                     state = old.get(source)
                     if state is None:
-                        values = (id, source, now, 0, None, None)
+                        values = (id, source, now, 0, None, None, 0)
                     else:
-                        due = state["next_due"] if state["failure_count"] else now
-                        values = (id, source, due, state["failure_count"], state["last_error"], state["last_checked"])
+                        minimum = state["min_interval_seconds"]
+                        candidate = (state["last_checked"] + interval(new_data, settings, source, minimum, now) *
+                                     min(2 ** state["failure_count"], 16)) if state["last_checked"] is not None else state["next_due"]
+                        due = max(state["next_due"], candidate) if state["failure_count"] else (now if changed_query else candidate)
+                        values = (id, source, due, state["failure_count"], state["last_error"],
+                                  state["last_checked"], minimum)
                     self.conn.execute("""INSERT INTO watch_sources
-                        (watch_id,source_id,next_due,failure_count,last_error,last_checked)
-                        VALUES(?,?,?,?,?,?)""", values)
+                        (watch_id,source_id,next_due,failure_count,last_error,last_checked,min_interval_seconds)
+                        VALUES(?,?,?,?,?,?,?)""", values)
                 current = self.source_schedules(id)
                 errors = [f"{source}: {state['last_error']}" for source, state in current.items() if state["last_error"]]
                 self.conn.execute("UPDATE watches SET next_due=?,failure_count=?,last_error=? WHERE id=?",
@@ -169,9 +192,11 @@ class Database:
         return bool(cur.rowcount)
 
     def get_watch(self, id: int) -> dict | None:
+        self._expire_black_week()
         return self._watch(self.conn.execute("SELECT * FROM watches WHERE id=?", (id,)).fetchone())
 
     def list_watches(self) -> list[dict]:
+        self._expire_black_week()
         return [self._watch(r) for r in self.conn.execute("SELECT * FROM watches ORDER BY id DESC")]
 
     def force_due(self, id: int, when: float):
@@ -182,6 +207,48 @@ class Database:
     def source_schedules(self, id: int) -> dict[str, dict]:
         return {r["source_id"]: dict(r) for r in self.conn.execute(
             "SELECT * FROM watch_sources WHERE watch_id=?", (id,))}
+
+    def effective_source_intervals(self, id: int, adapter_minimums: dict[str, int] | None = None) -> dict[str, dict]:
+        watch = self.get_watch(id)
+        if watch is None:
+            return {}
+        settings = self.get_settings()
+        adapter_minimums = adapter_minimums or {}
+        result = {}
+        for source, state in self.source_schedules(id).items():
+            minimum = max(state["min_interval_seconds"], adapter_minimums.get(source, 0))
+            normal, week = interval_pair(watch, source, minimum)
+            result[source] = {"normal_seconds": normal, "black_friday_seconds": week,
+                              "effective_seconds": interval(watch, settings, source, minimum),
+                              "min_interval_seconds": minimum, "next_due": state["next_due"],
+                              "failure_count": state["failure_count"], "last_error": state["last_error"],
+                              "last_checked": state["last_checked"]}
+        return result
+
+    def sync_source_minimums(self, minimums: dict[str, int]):
+        self._expire_black_week()
+        now = time.time()
+        settings = self.get_settings()
+        touched = set()
+        with self.conn:
+            for state in self.conn.execute("SELECT * FROM watch_sources"):
+                source = state["source_id"]
+                if source not in minimums or state["min_interval_seconds"] == minimums[source]:
+                    continue
+                watch = self._watch(self.conn.execute("SELECT * FROM watches WHERE id=?", (state["watch_id"],)).fetchone())
+                minimum = max(0, minimums[source])
+                if state["last_checked"] is None:
+                    due = state["next_due"]
+                else:
+                    candidate = state["last_checked"] + interval(watch, settings, source, minimum, now) * min(
+                        2 ** state["failure_count"], 16)
+                    due = max(state["next_due"], candidate) if state["failure_count"] else candidate
+                self.conn.execute("UPDATE watch_sources SET min_interval_seconds=?,next_due=? WHERE watch_id=? AND source_id=?",
+                                  (minimum, due, state["watch_id"], source))
+                touched.add(state["watch_id"])
+            for watch_id in touched:
+                self.conn.execute("UPDATE watches SET next_due=(SELECT MIN(next_due) FROM watch_sources WHERE watch_id=?) WHERE id=?",
+                                  (watch_id, watch_id))
 
     def due_watches(self, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
@@ -194,14 +261,37 @@ class Database:
         return {"paused": bool(r["paused"]), "black_friday_until": r["black_friday_until"],
                 "notification_enabled": bool(r["notification_enabled"])}
 
+    def _reschedule_sources(self, settings: dict, now: float):
+        for raw in self.conn.execute("SELECT * FROM watches"):
+            watch = self._watch(raw)
+            for source in self.source_schedules(watch["id"]).values():
+                if source["last_checked"] is None:
+                    continue
+                delay = interval(watch, settings, source["source_id"], source["min_interval_seconds"], now)
+                candidate = source["last_checked"] + delay * min(2 ** source["failure_count"], 16)
+                due = max(source["next_due"], candidate) if source["failure_count"] else candidate
+                self.conn.execute("UPDATE watch_sources SET next_due=? WHERE watch_id=? AND source_id=?",
+                                  (due, watch["id"], source["source_id"]))
+            self.conn.execute("UPDATE watches SET next_due=(SELECT MIN(next_due) FROM watch_sources WHERE watch_id=?) WHERE id=?",
+                              (watch["id"], watch["id"]))
+
+    def _expire_black_week(self):
+        now = time.time()
+        settings = self.get_settings()
+        if settings["black_friday_until"] and settings["black_friday_until"] <= now:
+            with self.conn:
+                self.conn.execute("UPDATE settings SET black_friday_until=0 WHERE id=1")
+                settings["black_friday_until"] = 0
+                self._reschedule_sources(settings, now)
+
     def update_settings(self, data: dict) -> dict:
         allowed = {"paused", "black_friday_until", "notification_enabled"}
         if set(data) - allowed:
             raise ValueError("unknown settings key")
         if "black_friday_until" in data:
             value = data["black_friday_until"]
-            if not isinstance(value, (int, float)) or (value != 0 and not time.time() < value <= time.time() + 86400):
-                raise ValueError("black_friday_until must be within 24 hours")
+            if not isinstance(value, (int, float)) or (value != 0 and not time.time() < value <= time.time() + 7 * 86400):
+                raise ValueError("black_friday_until must be within seven days")
         for k in ("paused", "notification_enabled"):
             if k in data and type(data[k]) is not bool:
                 raise ValueError(f"{k} must be bool")
@@ -210,18 +300,8 @@ class Database:
             with self.conn:
                 self.conn.execute("UPDATE settings SET " + ",".join(k + "=?" for k in keys) + " WHERE id=1",
                                   [data[k] for k in keys])
-                if "black_friday_until" in data and data["black_friday_until"] > time.time():
-                    settings = self.get_settings()
-                    for row in self.list_watches():
-                        for source in self.source_schedules(row["id"]).values():
-                            if source["last_checked"] is None:
-                                continue
-                            delay = interval(row, settings) * min(2 ** source["failure_count"], 16)
-                            candidate = source["last_checked"] + delay
-                            self.conn.execute("UPDATE watch_sources SET next_due=MIN(next_due,?) WHERE watch_id=? AND source_id=?",
-                                              (candidate, row["id"], source["source_id"]))
-                        self.conn.execute("UPDATE watches SET next_due=(SELECT MIN(next_due) FROM watch_sources WHERE watch_id=?) WHERE id=?",
-                                          (row["id"], row["id"]))
+                if "black_friday_until" in data:
+                    self._reschedule_sources(self.get_settings(), time.time())
         return self.get_settings()
 
     def list_offers(self, watch_id: int | None = None) -> list[dict]:
@@ -243,11 +323,32 @@ class Database:
             stale = (source is None or (source["last_checked"] is not None and r["seen_at"] < source["last_checked"])
                      or (source is not None and now >= source["next_due"]) or data.get("quality") == "feed_stale"
                      or (data.get("provenance") == "feed" and now - r["observed_at"] > FEED_FRESH_SECONDS)
-                     or now - r["observed_at"] > 2 * interval(watch, self.get_settings()))
+                     or now - r["observed_at"] > 2 * interval(
+                         watch, self.get_settings(), data["source"],
+                         source["min_interval_seconds"] if source else 0, now))
             result.append({"id": r["id"], "watch_id": r["watch_id"], **data,
                            "stale": stale, "evaluation": r["evaluation"],
                            "comparison_cents": r["comparison_cents"], "savings_cents": r["savings_cents"]})
         return result
+
+    def comparisons(self) -> list[dict]:
+        groups: dict[tuple, list[dict]] = {}
+        for offer in self.list_offers():
+            if (offer["stale"] or offer["availability"] != "in_stock"
+                    or offer["total_cents"] is None or offer.get("offer_type", "retail") != "retail"):
+                continue
+            identity = comparison_identity(offer)
+            if identity is not None:
+                groups.setdefault(identity, []).append(offer)
+        result = []
+        for identity, offers in groups.items():
+            if len({offer["merchant"].casefold() for offer in offers}) < 2:
+                continue
+            ranked = sorted(offers, key=lambda offer: (offer["total_cents"], offer["id"]))
+            result.append({"identity_basis": identity[0], "identity_value": identity[1],
+                           "offer_ids": [offer["id"] for offer in ranked],
+                           "lowest_total_cents": ranked[0]["total_cents"]})
+        return sorted(result, key=lambda group: (group["lowest_total_cents"], group["identity_value"]))
 
     def history(self, offer_id: int) -> list[dict]:
         return [dict(r) for r in self.conn.execute(
@@ -331,9 +432,10 @@ class Database:
                 if previous is None:
                     continue
                 failure = previous[0] + 1 if source_error else 0
-                delay = max(interval(row, self.get_settings()), minimum) * (min(2 ** failure, 16) if failure else 1)
-                self.conn.execute("""UPDATE watch_sources SET next_due=?,failure_count=?,last_error=?,last_checked=?
-                    WHERE watch_id=? AND source_id=?""", (checked_at + delay, failure, source_error, checked_at, watch_id, source))
+                delay = interval(row, self.get_settings(), source, minimum, checked_at) * (min(2 ** failure, 16) if failure else 1)
+                self.conn.execute("""UPDATE watch_sources SET next_due=?,failure_count=?,last_error=?,last_checked=?,min_interval_seconds=?
+                    WHERE watch_id=? AND source_id=?""",
+                    (checked_at + delay, failure, source_error, checked_at, minimum, watch_id, source))
                 self.conn.execute("""INSERT INTO source_status(source_id,last_checked,last_success,last_error)
                     VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET
                     last_checked=excluded.last_checked,

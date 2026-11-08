@@ -18,7 +18,8 @@ _REQUIRED = {
     "product_id", "name", "url", "price_cents", "shipping_cents", "currency",
     "availability", "merchant",
 }
-_OPTIONAL = {"variant", "gtin", "model", "manufacturer", "category", "coupon", "unit_price", "observed_at"}
+_OPTIONAL = {"variant", "gtin", "model", "manufacturer", "category", "coupon", "unit_price", "observed_at",
+             "seller", "pack_size", "condition", "offer_type"}
 
 
 def _text(value: object, field: str, *, required: bool = False) -> str:
@@ -71,14 +72,16 @@ class FeedAdapter(Adapter):
                 or not math.isfinite(observed) or observed <= 0 or observed > fetched_at + 60):
             raise ValueError("Feed-Angebot hat ungültigen observed_at-Zeitpunkt")
         quality = "feed_stale" if fetched_at - observed > 2 * self.min_interval_seconds else "feed_reported"
-        strings = {key: _text(row.get(key, ""), key) for key in ("variant", "gtin", "model", "manufacturer", "category")}
+        strings = {key: _text(row.get(key, ""), key) for key in
+                   ("variant", "gtin", "model", "manufacturer", "category", "seller", "pack_size")}
         nullable = {key: None if row.get(key) is None else _text(row[key], key) for key in ("coupon", "unit_price")}
         return Offer(
             source=self.id, merchant=merchant, product_id=product_id, name=name, url=url,
             price_cents=_cents(row["price_cents"], "price_cents"),
             shipping_cents=_cents(row["shipping_cents"], "shipping_cents", nullable=True),
             currency="EUR", availability=availability, checked_at=float(observed),
-            quality=quality, provenance="feed", **strings, **nullable,
+            quality=quality, provenance="feed", condition=row.get("condition", "unknown"),
+            offer_type=row.get("offer_type", "retail"), **strings, **nullable,
         )
 
     async def _catalog(self) -> list[Offer]:
@@ -90,7 +93,7 @@ class FeedAdapter(Adapter):
                 raise ValueError("Feed muss ein Objekt mit offers-Liste sein")
             fetched_at = time()
             offers = [self._offer(row, fetched_at) for row in data["offers"]]
-            keys = [(offer.merchant.casefold(), offer.product_id.casefold(), offer.variant.casefold()) for offer in offers]
+            keys = [offer.key for offer in offers]
             if len(set(keys)) != len(keys):
                 raise ValueError("Feed enthält doppelte Produkt-Varianten")
             self._cached = offers

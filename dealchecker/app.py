@@ -73,15 +73,18 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
     async def state():
         db = app.state.db
         watches, checks = db.list_watches(), db.list_checks()
+        minimums = {source_id: getattr(adapter, 'min_interval_seconds', 0)
+                    for source_id, adapter in app.state.registry.items()}
         for watch in watches:
             watch['running'] = app.state.engine.is_running(watch['id'])
+            watch['effective_source_intervals'] = db.effective_source_intervals(watch['id'], minimums)
         sources = source_catalog(app.state.registry)
         statuses = db.source_statuses()
         for source in sources:
             source.update(statuses.get(source['id'], {
                 'last_checked':None, 'last_success':None, 'last_error':None,
             }))
-        return {'watches':watches, 'offers':db.list_offers(), 'events':db.list_events(),
+        return {'watches':watches, 'offers':db.list_offers(), 'comparisons':db.comparisons(), 'events':db.list_events(),
                 'checks':checks, 'settings':db.get_settings(), 'sources':sources,
                 'notification_configured':bool(config.discord_webhook)}
 
@@ -124,8 +127,8 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
     @app.put('/api/settings')
     async def settings(patch: SettingsPatch):
         values = patch.model_dump(exclude_none=True)
-        if values.get('black_friday_until', 0) > time.time() + 86400 + 2:
-            raise HTTPException(422, 'Black-Friday-Modus ist auf maximal 24 Stunden begrenzt')
+        if values.get('black_friday_until', 0) > time.time() + 7 * 86400 + 2:
+            raise HTTPException(422, 'Black-Friday-Modus ist auf maximal sieben Tage begrenzt')
         if values.get('notification_enabled') and not config.discord_webhook:
             raise HTTPException(422, 'Discord-Webhook fehlt in der lokalen Umgebungskonfiguration')
         try:

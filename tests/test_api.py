@@ -92,12 +92,28 @@ def test_json_body_size_and_validation(client):
 
 def test_settings_validation_and_security_headers(client):
     assert client.put('/api/settings', json={'notification_enabled':True}).status_code == 422
-    assert client.put('/api/settings', json={'black_friday_until':time.time()+90000}).status_code == 422
+    assert client.put('/api/settings', json={'black_friday_until':time.time()+90000}).status_code == 200
+    assert client.put('/api/settings', json={'black_friday_until':time.time()+7*86400+3600}).status_code == 422
     assert client.put('/api/settings', json={'paused':'yes'}).status_code == 422
     assert client.put('/api/settings', json={'paused':True}).json()['paused'] is True
     response = client.get('/api/health')
     assert response.json()['status'] == 'ok'
     assert "default-src 'self'" in response.headers['Content-Security-Policy']
+
+
+def test_state_exposes_effective_source_schedule_and_safe_comparisons(client):
+    payload = watch_payload(black_friday_interval_seconds=1200,
+                            source_intervals={'fixture': {'normal_seconds': 5400, 'black_friday_seconds': 600}})
+    created = client.post('/api/watches', json=payload)
+    assert created.status_code == 201
+    state = client.get('/api/state').json()
+    source = state['watches'][0]['effective_source_intervals']['fixture']
+    assert source['normal_seconds'] == 5400
+    assert source['black_friday_seconds'] == 600
+    assert source['effective_seconds'] == 5400
+    assert source['min_interval_seconds'] == 300
+    assert source['next_due'] == state['watches'][0]['next_due']
+    assert state['comparisons'] == []
 
 
 def test_sources_report_their_own_success_and_failure(tmp_path):
@@ -144,7 +160,7 @@ def test_api_healthy_source_keeps_schedule_and_alerts_after_long_restart(tmp_pat
     config = Config(data_dir=tmp_path)
     def app():
         return create_app(config, adapters={'fixture':good, 'bad':bad}, start_scheduler=False)
-    payload = watch_payload(priority='critical')
+    payload = watch_payload(priority='critical', interval_seconds=300, black_friday_interval_seconds=300)
     payload['source_ids'] = ['fixture', 'bad']
     with TestClient(app(), base_url='http://localhost') as c:
         id = c.post('/api/watches', json=payload).json()['id']

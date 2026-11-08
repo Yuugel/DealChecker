@@ -117,7 +117,7 @@ async def test_unknown_total_stale_observation_and_filter(tmp_path):
     engine = Engine(db, {"synthetic": adapter})
     assert (await engine.check_watch(row["id"]))["offers"] == 0
     assert db.list_events() == []
-    adapter.results = [offer(500, 0, checked_at=time.time() - 10000)]
+    adapter.results = [offer(500, 0, checked_at=time.time() - 60000)]
     await engine.check_watch(row["id"])
     assert db.list_offers(row["id"])[0]["stale"] is True
     assert db.list_events() == []
@@ -405,7 +405,7 @@ def test_outbox_status_and_exponential_backoff(tmp_path):
 def test_black_friday_advances_existing_due(tmp_path):
     db = Database(tmp_path / "x.db")
     row = db.create_watch(watch(priority="normal"))
-    checked = time.time() - 1000
+    checked = time.time() - 20000
     db.record_check(row["id"], [], "ok", None, checked)
     old_due = db.get_watch(row["id"])["next_due"]
     db.update_settings({"black_friday_until": time.time() + 3600})
@@ -506,7 +506,7 @@ def test_version_one_migration_deduplicates_old_replays(tmp_path):
                         "FROM observations WHERE offer_id=?", (offer_id,))
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 4
+    assert reopened.schema_version == 5
     assert len(reopened.history(offer_id)) == 1
     reopened.close()
 
@@ -539,7 +539,7 @@ async def test_source_status_tracks_each_source_and_survives_restart(tmp_path):
     await engine.close()
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 4
+    assert reopened.schema_version == 5
     assert reopened.source_statuses() == statuses
     reopened.close()
 

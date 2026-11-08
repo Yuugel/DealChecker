@@ -104,6 +104,12 @@ class Offer(BaseModel):
     def trim_identity(cls, value):
         return value.strip() if isinstance(value, str) else value
 
+    @model_validator(mode="after")
+    def reference_has_unknown_shipping(self):
+        if self.offer_type == "reference" and self.shipping_cents is not None:
+            raise ValueError("reference prices cannot claim delivered shipping")
+        return self
+
     @computed_field
     @property
     def total_cents(self) -> int | None:
