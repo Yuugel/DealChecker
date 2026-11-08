@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from collections import OrderedDict
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from time import monotonic, time
 from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
@@ -24,6 +25,11 @@ _CENTS = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,2})?")
 _WORDS = re.compile(r"[^\W_]+")
 _MODEL = re.compile(r"(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9][A-Za-z0-9._/-]{2,99}")
 _DELAY = re.compile(r"[0-9]{1,5}(?:\.[0-9]{1,3})?")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_PRICE_CONDITIONS = {
+    "validForMemberTier", "eligibleCustomerType", "priceSpecification", "eligibleQuantity",
+    "eligibleTransactionVolume", "requiresSubscription", "discountCode", "coupon", "addOn",
+}
 _SHIPPING_FIELDS = {"@type", "shippingDestination", "shippingRate", "deliveryTime"}
 _MAX_DETAILS = 6
 _MAX_CACHE = 96
@@ -220,9 +226,33 @@ def _money(value: object) -> int:
     return int(euro) * 100 + int(fraction.ljust(2, "0"))
 
 
+def _public_price(offer: dict) -> int:
+    if _PRICE_CONDITIONS & offer.keys():
+        raise ValueError("Händlerseite nennt keinen eindeutigen Preis ohne Bedingungen")
+    now = datetime.now(timezone.utc)
+    today = date.today()
+    for field, starts in (("validFrom", True), ("availabilityStarts", True), ("validThrough", False),
+                          ("priceValidUntil", False), ("availabilityEnds", False)):
+        if field not in offer:
+            continue
+        value = offer[field]
+        try:
+            if not isinstance(value, str):
+                raise ValueError
+            if _DATE.fullmatch(value):
+                boundary, current = date.fromisoformat(value), today
+            else:
+                boundary, current = datetime.fromisoformat(value), now
+                if boundary.tzinfo is None:
+                    raise ValueError
+        except ValueError:
+            raise ValueError("Händlerpreis hat einen ungültigen Gültigkeitszeitraum") from None
+        if (starts and current < boundary) or (not starts and current > boundary):
+            raise ValueError("Händlerpreis liegt außerhalb seines Gültigkeitszeitraums")
+    return _money(offer.get("price"))
+
+
 def _shipping(offer: dict) -> int | None:
-    if {"eligibleQuantity", "eligibleTransactionVolume"} & offer.keys():
-        return None
     entries = offer.get("shippingDetails")
     entries = entries if isinstance(entries, list) else [entries]
     matches = []
@@ -259,10 +289,17 @@ def _search_term(term: str) -> str:
     return term
 
 
+def _model_query(term: str) -> bool:
+    return bool(_MODEL.fullmatch(term) and (re.search(r"[._/-]", term) or re.search(r"[0-9]{4,}$", term)))
+
+
 def _matches_term(offer: Offer, term: str) -> bool:
     if gtin := canonical_gtin(term):
         return canonical_gtin(offer.gtin) == gtin
-    return offer.model.casefold() == term.casefold() or _includes(f"{offer.name} {offer.variant}", term)
+    model_matches = offer.model.casefold() == term.casefold()
+    if _model_query(term):
+        return model_matches
+    return model_matches or _includes(f"{offer.name} {offer.variant}", term)
 
 
 def _gtin(product: dict, page_gtin: str) -> str:
@@ -347,7 +384,7 @@ class PublicShopAdapter(Adapter):
             source=self.id, merchant=self.seller_name, seller=self.seller_name,
             product_id=product_id, name=name, url=url, variant=variant,
             gtin=_gtin(product, page_gtin), model=_text(product.get("mpn")), manufacturer=brand,
-            category=_text(product.get("category")), price_cents=_money(offer.get("price")),
+            category=_text(product.get("category")), price_cents=_public_price(offer),
             shipping_cents=_shipping(offer), availability=availability, condition=condition, checked_at=time(),
         )
 
@@ -389,7 +426,7 @@ class PublicShopAdapter(Adapter):
         for term in dict.fromkeys(terms):
             links = await self._links(_search_term(term))
             matching_links = [url for url, description in links if _includes(description, term)]
-            if identity or canonical_gtin(term) or (not matching_links and _MODEL.fullmatch(term)):
+            if identity or canonical_gtin(term) or _model_query(term) or (not matching_links and _MODEL.fullmatch(term)):
                 matching_links = [url for url, _ in links]
             candidates.update(dict.fromkeys(matching_links))
         if exact and len(candidates) > _MAX_DETAILS:

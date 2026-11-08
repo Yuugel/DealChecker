@@ -243,3 +243,59 @@ async def test_robots_crawl_delay_applies_to_normal_page_requests():
     for url in urls:
         assert await client.get_page(url) == "ok"
     assert all(second - first >= 0.02 for first, second in zip(pages.timestamps, pages.timestamps[1:]))
+
+
+@pytest.mark.asyncio
+async def test_model_discovery_excludes_accessory_titles_and_unverified_models():
+    accessory = ALTERNATE + "/Example/Case-for-XH-Z019/html/product/123457"
+    unverified = ALTERNATE + "/Example/Bundle-for-XH-Z019/html/product/123458"
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=XH-Z019": (
+            '<a href="/Example/Case-for-XH-Z019/html/product/123457" class="productBox">Case</a>'
+            '<a href="/Example/Bundle-for-XH-Z019/html/product/123458" class="productBox">Bundle</a>'
+            '<a href="/Example/Radio-100/html/product/123456" class="productBox">Radio</a>'
+        ),
+        accessory: product_page(accessory, "ALTERNATE GmbH", sku=123457)
+            .replace(EXAMPLE, "Protective case for XH-Z019").replace("RADIO-100", "CASE-Z019"),
+        unverified: product_page(unverified, "ALTERNATE GmbH", sku=123458)
+            .replace(EXAMPLE, "Bundle for XH-Z019").replace("RADIO-100", ""),
+        ALTERNATE_PRODUCT: product_page(ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456)
+            .replace("RADIO-100", "XH-Z019"),
+    })
+    watch = WatchInput(name=EXAMPLE, kind="discovery", query="XH-Z019", source_ids=["alternate"])
+    offer, = await AlternateAdapter(pages).search(watch)
+    assert offer.url == ALTERNATE_PRODUCT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("condition", [
+    {"validForMemberTier": {"name": "Member"}},
+    {"eligibleCustomerType": "Business"},
+    {"priceSpecification": {"price": "29.90", "priceCurrency": "EUR"}},
+    {"eligibleQuantity": {"minValue": 2}},
+    {"priceValidUntil": "2000-01-01"},
+    {"validFrom": "2099-01-01"},
+    {"validThrough": "not-a-date"},
+])
+async def test_direct_link_rejects_conditional_or_invalid_price(condition):
+    pages = LocalPages({
+        BERRY + "/robots.txt": ROBOTS,
+        BERRY_PRODUCT: product_page(BERRY_PRODUCT, "BerryBase", sku="RAD-1",
+                                    offers=lambda offer: [{**offer, **condition}]),
+    })
+    watch = WatchInput(name=EXAMPLE, source_ids=["berrybase"], url=BERRY_PRODUCT)
+    with pytest.raises(ValueError, match="(?i)preis"):
+        await BerryBaseAdapter(pages).lookup(watch)
+
+
+@pytest.mark.asyncio
+async def test_direct_link_keeps_current_unconditional_price_with_validity_date():
+    pages = LocalPages({
+        BERRY + "/robots.txt": ROBOTS,
+        BERRY_PRODUCT: product_page(BERRY_PRODUCT, "BerryBase", sku="RAD-1",
+                                    offers=lambda offer: [{**offer, "priceValidUntil": "2099-01-01"}]),
+    })
+    watch = WatchInput(name=EXAMPLE, source_ids=["berrybase"], url=BERRY_PRODUCT)
+    offer, = await BerryBaseAdapter(pages).lookup(watch)
+    assert offer.price_cents == 1990
