@@ -125,6 +125,7 @@ async def test_post_json_response_parses_bounded_json_without_changing_notificat
         await client.post_json_response('https://modula24.com/api/checkout/shipping',
                                         {}, allowed_hosts={'modula24.com'})
     assert all(not call[2]['allow_redirects'] for call in client._session.calls)
+    assert all('max_field_size' not in call[2] for call in client._session.calls)
     await client.close()
 
 
@@ -138,6 +139,7 @@ async def test_text_transport_is_bounded_and_does_not_follow_redirects():
         with pytest.raises(ValueError):
             await client.get_text('https://example.com/product', allowed_hosts={'example.com'}, max_body=limit)
     assert all(not call[2]['allow_redirects'] for call in client._session.calls)
+    assert all(call[2]['max_field_size'] == 16384 for call in client._session.calls)
     await client.close()
 
 

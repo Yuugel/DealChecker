@@ -100,6 +100,9 @@ class SafeHttpClient:
             try:
                 async with self._get_session().request(
                     method, url, json=payload, allow_redirects=False,
+                    # Some public shop CSP headers exceed aiohttp's 8 KiB default.
+                    # Retain a finite 16 KiB header-field cap for HTML/robots only.
+                    **({'max_field_size': 16384} if text_response else {}),
                 ) as response:
                     if response.status == 429:
                         try:
