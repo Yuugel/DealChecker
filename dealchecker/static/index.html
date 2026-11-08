@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>DealChecker · Preisbeobachtung</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Hauptnavigation">
+      <a class="brand" href="#dashboard" aria-label="DealChecker Startseite">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <span>deal<span class="brand-light">checker</span><small>LOKALE PREISBEOBACHTUNG</small></span>
+      </a>
+      <div class="side-label">ÜBERSICHT</div>
+      <nav class="nav-links">
+        <a class="nav-link active" href="#dashboard"><span class="nav-icon">⌂</span>Dashboard</a>
+        <a class="nav-link" href="#watches"><span class="nav-icon">◉</span>Beobachtungen <span class="nav-count" id="nav-watch-count">0</span></a>
+        <a class="nav-link" href="#activity"><span class="nav-icon">↻</span>Aktivität</a>
+        <a class="nav-link" href="#sources"><span class="nav-icon">◌</span>Quellen</a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="side-health" id="side-health">
+        <span class="health-dot"></span><div><strong>Verbinde …</strong><small>Lokaler Dienst</small></div>
+      </div>
+      <a class="nav-link settings-link" href="#settings"><span class="nav-icon">⚙</span>Einstellungen</a>
+      <div class="sidebar-foot">Deine Daten bleiben auf<br>diesem Gerät.</div>
+    </aside>
+
+    <main class="main-content" id="dashboard">
+      <header class="topbar">
+        <div class="crumb"><span>DEALCHECKER</span><span class="crumb-sep">/</span><strong>Dashboard</strong></div>
+        <div class="top-actions"><span class="local-badge"><span></span> LOKAL &amp; PRIVAT</span><button class="icon-button" id="refresh-button" type="button" aria-label="Daten aktualisieren" title="Daten aktualisieren">↻</button></div>
+      </header>
+      <section class="page-heading">
+        <div><p class="eyebrow">DEIN ÜBERBLICK</p><h1>Guten Tag <span class="heading-wave">✳</span></h1><p class="subheading">Beobachte Preise transparent und ohne falsche Versprechen.</p></div>
+        <button class="button button-primary" id="new-watch-button" type="button"><span aria-hidden="true">＋</span> Neue Beobachtung</button>
+      </section>
+
+      <section class="coverage-banner" aria-label="Quellenabdeckung">
+        <div class="coverage-icon" aria-hidden="true">◌</div>
+        <div class="coverage-copy"><strong>Quellenabdeckung</strong><span>Apple App Store DE: App-Kaufpreise ohne Abos/In-App-Käufe. Modula24: Möbelteile und Zubehör; Versand für ein Stück nach Deutschland, soweit im Feed angegeben.</span></div>
+        <span class="coverage-pill" id="coverage-status"><span class="health-dot"></span> Status unbekannt</span>
+      </section>
+
+      <section class="stats-grid" aria-label="Zusammenfassung">
+        <article class="stat-card"><div class="stat-top"><span>AKTIVE BEOBACHTUNGEN</span><span class="stat-icon icon-cyan">◉</span></div><div class="stat-value" id="stat-watches">–</div><div class="stat-foot" id="stat-watches-foot">Deine gespeicherten Produkte</div></article>
+        <article class="stat-card"><div class="stat-top"><span>ANGEBOTE GEFUNDEN</span><span class="stat-icon icon-green">↘</span></div><div class="stat-value" id="stat-offers">–</div><div class="stat-foot">Letzter bekannter Stand je Produkt</div></article>
+        <article class="stat-card"><div class="stat-top"><span>NEUE EREIGNISSE</span><span class="stat-icon icon-amber">✧</span></div><div class="stat-value" id="stat-events">–</div><div class="stat-foot">Gespeicherte Preisbeobachtungen</div></article>
+        <article class="stat-card"><div class="stat-top"><span>QUELLEN VERFÜGBAR</span><span class="stat-icon icon-blue">◌</span></div><div class="stat-value" id="stat-sources">–</div><div class="stat-foot">Quellen mit bekannter Konfiguration</div></article>
+      </section>
+
+      <section class="content-section" id="watches">
+        <div class="section-heading"><div><p class="eyebrow">DEINE PRODUKTE</p><h2>Beobachtungen</h2><p class="section-note">Preise und Vergleiche stammen ausschließlich aus echten Quellenbeobachtungen.</p></div><button class="button button-secondary" id="new-watch-button-secondary" type="button">＋ Hinzufügen</button></div>
+        <div class="filter-row"><div class="filter-label"><span aria-hidden="true">☷</span> Alle Beobachtungen <span class="filter-count" id="watch-list-count">0</span></div><label class="search-box"><span aria-hidden="true">⌕</span><span class="sr-only">Beobachtungen suchen</span><input id="watch-search" type="search" placeholder="Produkt suchen …"></label></div>
+        <div id="watch-list" class="watch-list" aria-live="polite"></div>
+      </section>
+
+      <section class="content-section activity-section" id="activity">
+        <div class="section-heading"><div><p class="eyebrow">WAS PASSIERT IST</p><h2>Letzte Aktivität</h2><p class="section-note">Ereignisse und Prüfprotokolle aus diesem lokalen Dienst.</p></div><button class="text-button" id="activity-refresh" type="button">Aktualisieren <span aria-hidden="true">↻</span></button></div>
+        <div class="activity-grid"><article class="panel"><div class="panel-heading"><div><h3>Preisereignisse</h3><p>Beobachtete Änderungen, keine Marktpreis-Schätzung</p></div><span class="panel-mark mark-green">✧</span></div><div id="events-list" class="compact-list"></div></article><article class="panel"><div class="panel-heading"><div><h3>Prüfprotokoll</h3><p>Letzte Abfragen der Quellen</p></div><span class="panel-mark mark-blue">↻</span></div><div id="checks-list" class="compact-list"></div></article></div>
+      </section>
+
+      <section class="content-section" id="sources">
+        <div class="section-heading"><div><p class="eyebrow">DATENHERKUNFT</p><h2>Quellenabdeckung</h2><p class="section-note">Eine Quelle wird nur angezeigt, wenn sie im laufenden Dienst registriert ist.</p></div></div>
+        <div id="sources-list" class="sources-grid"></div>
+      </section>
+
+      <section class="content-section settings-section" id="settings">
+        <div class="section-heading"><div><p class="eyebrow">LAUFZEIT &amp; MELDUNGEN</p><h2>Einstellungen</h2><p class="section-note">Steuere automatische Prüfungen und Benachrichtigungen.</p></div></div>
+        <div class="settings-grid">
+          <article class="panel settings-panel"><div class="panel-heading"><div><h3>Prüfungen</h3><p>Steuerung für den lokalen Scheduler</p></div><span class="panel-mark mark-blue">⚙</span></div><label class="setting-row"><span><strong>Alle automatischen Prüfungen pausieren</strong><small>Manuelle Prüfungen sind während einer Pause ebenfalls ausgesetzt.</small></span><input type="checkbox" id="setting-paused" class="switch"></label><label class="setting-row"><span><strong>24‑Stunden‑Modus</strong><small>Intervallverkürzung bis zum Ablaufzeitpunkt.</small></span><input type="checkbox" id="setting-bf" class="switch"></label><p class="setting-status" id="bf-status"></p></article>
+          <article class="panel settings-panel"><div class="panel-heading"><div><h3>Benachrichtigungen</h3><p>Lokale Ereignisse bleiben immer sichtbar.</p></div><span class="panel-mark mark-amber">♧</span></div><label class="setting-row"><span><strong>Benachrichtigungen aktivieren</strong><small id="notification-status">Konfigurationsstatus wird geladen.</small></span><input type="checkbox" id="setting-notifications" class="switch"></label><div id="settings-feedback" class="inline-feedback" role="status"></div></article>
+        </div>
+      </section>
+      <footer class="page-footer"><span>DEALCHECKER <span class="footer-dot">·</span> LOKALER DIENST</span><span>Stand <time id="updated-at">–</time></span></footer>
+    </main>
+  </div>
+
+  <dialog id="watch-dialog" class="modal watch-modal" aria-labelledby="watch-dialog-title">
+    <form id="watch-form" method="dialog">
+      <div class="modal-heading"><div><p class="eyebrow">PRODUKT KONFIGURIEREN</p><h2 id="watch-dialog-title">Neue Beobachtung</h2></div><button type="button" class="icon-button close-dialog" aria-label="Dialog schließen">×</button></div>
+      <input type="hidden" id="watch-id">
+      <div class="form-scroll">
+        <div class="form-grid">
+          <label class="field field-wide">Anzeigename <span class="required-mark">*</span><input id="watch-name" required maxlength="160" autocomplete="off" placeholder="z. B. Monument Valley"></label>
+          <fieldset class="field field-wide kind-choice"><legend>Suchmodus</legend><label><input type="radio" name="watch-kind" value="exact" checked> Exakt <small>Ein eindeutig bestimmtes Produkt</small></label><label><input type="radio" name="watch-kind" value="discovery"> Entdecken <small>Passende Treffer zur Suchanfrage</small></label></fieldset>
+          <label class="field field-wide">Suchanfrage<input id="watch-query" maxlength="300" placeholder="Titel oder Suchbegriffe"></label>
+          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Apple ist standardmäßig ausgewählt. Modula24 deckt nur physische Möbelteile und Zubehör ab; nutze dafür konkrete Begriffe wie „Kugel“ oder „Konnektor“.</small></fieldset>
+          <label class="field">Produkt-ID<input id="watch-product-id" maxlength="160" placeholder="Track ID oder Quell-ID"></label>
+          <label class="field">Produkt-URL<input id="watch-url" type="url" maxlength="2048" placeholder="App-Store- oder Modula24-Produktlink"></label>
+          <label class="field">GTIN / EAN<input id="watch-gtin" maxlength="32" inputmode="numeric"></label>
+          <label class="field">Modell<input id="watch-model" maxlength="160" placeholder="Modellkennung"></label>
+          <label class="field">Variante<input id="watch-variant" maxlength="160" placeholder="z. B. Farbe / Größe"></label>
+          <label class="field">Kategorie<input id="watch-category" maxlength="120"></label>
+          <label class="field">Hersteller<input id="watch-manufacturer" maxlength="120"></label>
+          <label class="field field-wide">Synonyme <small>Kommagetrennt · gelten zusätzlich zur Suchanfrage</small><textarea id="watch-synonyms" rows="2" maxlength="1000"></textarea></label>
+          <label class="field field-wide">Ausschließen <small>Kommagetrennte Begriffe</small><textarea id="watch-exclusions" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Händler einschließen <small>Kommagetrennt</small><textarea id="watch-merchants-include" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Händler ausschließen <small>Kommagetrennt</small><textarea id="watch-merchants-exclude" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Wunschpreis in EUR<input id="watch-target" inputmode="decimal" placeholder="z. B. 4,99"></label>
+          <label class="field">Preislimit in EUR<input id="watch-max" inputmode="decimal" placeholder="z. B. 9,99"></label>
+          <label class="field">Priorität<select id="watch-priority"><option value="critical">Kritisch · 5 Min.</option><option value="high">Hoch · 15 Min.</option><option value="normal" selected>Normal · 30 Min.</option><option value="low">Niedrig · 60 Min.</option></select></label>
+          <label class="field">Eigenes Prüfintervall in Sekunden<input id="watch-interval" type="number" min="300" max="86400" step="1" placeholder="Automatisch nach Priorität"></label>
+          <label class="field field-wide pause-row"><span><strong>Diese Beobachtung pausieren</strong><small>Während der Pause werden keine automatischen oder manuellen Abfragen ausgeführt.</small></span><input type="checkbox" id="watch-paused" class="switch"></label>
+        </div>
+      </div>
+      <div class="form-error" id="watch-form-error" role="alert"></div>
+      <div class="modal-actions"><button type="button" class="button button-quiet close-dialog">Abbrechen</button><button type="submit" class="button button-primary" id="watch-save">Beobachtung speichern</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="history-dialog" class="modal history-modal" aria-labelledby="history-title">
+    <div class="modal-heading"><div><p class="eyebrow">QUELLENBEOBACHTUNGEN</p><h2 id="history-title">Preisverlauf</h2><p id="history-subtitle" class="section-note"></p></div><button type="button" class="icon-button close-dialog" aria-label="Dialog schließen">×</button></div>
+    <div id="history-chart" class="history-chart" role="img" aria-label="Diagramm der beobachteten Preise"></div>
+    <div class="table-wrap"><table><thead><tr><th>Zeitpunkt</th><th>Artikelpreis</th><th>Versand</th><th>Gesamt</th><th>Verfügbarkeit</th><th>Herkunft</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+    <div class="modal-actions"><button type="button" class="button button-secondary close-dialog">Schließen</button></div>
+  </dialog>
+
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

@@ -28,6 +28,14 @@ Core may add private/public helpers as necessary. `Engine(db, adapters, notifier
 `Scheduler(engine)`: `async start()` starts background task and returns promptly; `async stop()` drains/stops. Tick every 5s. Persist next_due for restarts. App owns one process; additional process using same DB prohibited via application lock.
 `DiscordNotifier(client, webhook_url: str)`: `async send(event:dict)->None`. Event fields product/name, merchant, total_cents, comparison_cents, savings_cents, url, checked_at, availability, reason. Restrict discord.com/discordapp.com webhook paths; redact errors, allowed_mentions empty. Durable outbox retry driven by Engine; notification_enabled default false. Never configure fake credentials.
 
+## Review clarifications (binding)
+- Discovery requires query. Apple exact uses a numeric trackId or locally parsed https://apps.apple.com/de/.../idNUMBER URL; title-only exact must resolve a single exact case-insensitive title or report ambiguity/no match. Never fuzzy-bind products. Apple rejects GTIN/model/variant. Digital App Store purchases have shipping_cents=0; price excludes in-app purchases/subscriptions.
+- Price ceilings filter known total, never item price alone. Unknown total is not eligible under a price ceiling.
+- Alert gate: once an offer has alerted, a new alert requires total strictly below its last alerted total AND previous eligible observation; unchanged/rising/recovered prices do not renotify. Event uniqueness remains durable. Discord delivery is at-least-once after crash, not exactly-once.
+- Partial source failures persist successful results but return status error, store source-specific errors, and back off. Zero matches from a successful query is distinct from failure.
+- tick awaits gathered bounded due work (max 4); check deadline 60 seconds for all sources/synonyms. Running state is process-local; app lock excludes a second process. Schema uses PRAGMA user_version with explicit incremental migrations; test reopen/version behavior.
+- Authorized feeds are finite JSON catalogs, max 2MiB; schema {offers:[{product_id,name,url,price_cents,shipping_cents,currency,availability,merchant,variant?,gtin?,model?,manufacturer?,category?,coupon?,unit_price?}]}. All required fields explicit; no pretending null availability is in-stock. Current checked_at reflects feed retrieval; quality='feed_reported', provenance='feed'. Optional feed observed_at must be honored, old rows marked stale/not alertable. Feeds with no item timestamp are catalogue observations, not confirmed merchant live stock. Feed auth is deferred; public authorized feeds only (no secrets in URLs). Env config only; no UI arbitrary URLs fetched.
+
 ## HTTP routes / UI contract
 - GET /api/state -> {watches,offers,events,checks,settings,sources,notification_configured:bool}; source catalog includes last_error/last_checked when available.
 - POST /api/watches JSON WatchInput -> watch (201).
