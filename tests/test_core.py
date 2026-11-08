@@ -614,6 +614,34 @@ async def test_source_error_on_other_watch_keeps_healthy_offer_fresh(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_repeated_free_offer_without_target_never_alerts(tmp_path):
+    db = Database(tmp_path / "free.db")
+    row = db.create_watch(watch())
+    adapter = Adapter()
+    engine = Engine(db, {"synthetic": adapter})
+    for index in range(5):
+        adapter.results = [offer(0, 0, checked_at=time.time() + index * .001)]
+        assert (await engine.check_watch(row["id"]))["status"] == "ok"
+    assert db.list_events() == []
+    assert len(db.history(db.list_offers(row["id"])[0]["id"])) == 5
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_positive_to_free_is_genuine_new_best(tmp_path):
+    db = Database(tmp_path / "drop-to-free.db")
+    row = db.create_watch(watch())
+    adapter = Adapter([offer(100, 0)])
+    engine = Engine(db, {"synthetic": adapter})
+    await engine.check_watch(row["id"])
+    adapter.results = [offer(0, 0)]
+    await engine.check_watch(row["id"])
+    assert len(db.list_events()) == 1
+    assert db.list_events()[0]["reason"] == "Neuer Bestpreis"
+    await engine.close()
+
+
+@pytest.mark.asyncio
 async def test_filtered_out_offer_becomes_stale_after_successful_check(tmp_path):
     db = Database(tmp_path / "filtered.db")
     row = db.create_watch(watch(kind="discovery", query="Synthetic", max_price_cents=1500))

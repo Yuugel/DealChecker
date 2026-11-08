@@ -64,9 +64,9 @@ def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: 
         reason = "Wunschpreis erreicht"
     elif comparison is not None and offer.total_cents < comparison:
         reason = "Neuer Bestpreis"
-    elif len(previous) >= 3 and offer.total_cents <= .9 * statistics.median(previous):
+    elif len(previous) >= 3 and statistics.median(previous) > 0 and offer.total_cents < statistics.median(previous) and offer.total_cents <= .9 * statistics.median(previous):
         reason = "Sehr gutes Angebot"
-    elif previous and offer.total_cents <= .95 * previous[-1]:
+    elif previous and previous[-1] > 0 and offer.total_cents < previous[-1] and offer.total_cents <= .95 * previous[-1]:
         reason = "Interessanter Preisrückgang"
     evaluation = reason or ("Unzureichende Daten" if not history else "Kein relevantes Angebot")
     if reason and last_alert is not None:
