@@ -67,11 +67,9 @@ async def test_apple_cache_single_flight_preserves_observation_time():
     assert (await adapter.search(watch))[0].checked_at == first[0].checked_at
 
 
-@pytest.mark.asyncio
-async def test_apple_rejects_more_than_six_distinct_terms():
-    watch = WatchInput(name="Games", kind="discovery", query="one", synonyms=["two", "three", "four", "five", "six", "seven"])
-    with pytest.raises(ValueError, match="sechs"):
-        await AppleAdapter(FakeClient([])).search(watch)
+def test_watch_input_rejects_more_than_five_synonyms():
+    with pytest.raises(ValueError, match="synonyms"):
+        WatchInput(name="Games", kind="discovery", query="one", synonyms=["two", "three", "four", "five", "six", "seven"])
 
 
 @pytest.mark.asyncio
