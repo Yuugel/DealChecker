@@ -21,8 +21,12 @@ am offenen Watch-Formular werden bei diesen Aktualisierungen nicht überschriebe
   geschlossenen Liste einzeln mit Produktname, Händler, Angebot, Verlauf,
   Verfügbarkeit, Quelle, Vergleich, Gutschein, Grundpreis und Zeitstatus
   aufklappbar. Die Auswahl bleibt über automatische Aktualisierungen erhalten.
-  Feeddaten werden als Katalogabruf gekennzeichnet; Feed-Verfügbarkeit wird als
-  vom Feed gemeldet dargestellt.
+  Für die Kopfzeile stehen nicht veraltete, verfügbare Treffer vor anderen
+  Ergebnissen; danach zählt der bekannte Gesamtpreis. Ausschließlich veraltete
+  Kopfzeilen werden sichtbar als letzter bekannter Preis markiert. Feeddaten
+  werden mit neutralen Labels wie „Feed-Zeitpunkt“ und
+  „Katalog-Beobachtung“ gekennzeichnet; Feed-Verfügbarkeit wird als vom Feed
+  gemeldet dargestellt.
 - Das Watch-Formular enthält die vollständigen `WatchInput`-Felder. Preiseingaben
   werden vor dem API-Aufruf als sichere Ganzzahl-Cents serialisiert. Beim Ändern
   wird das vollständige Formular erneut übertragen. Quell-IDs, die nicht mehr im

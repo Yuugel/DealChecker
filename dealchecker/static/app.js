@@ -138,20 +138,28 @@
       copy.append(el('strong', '', watch.name || 'Ohne Namen'));
       const sourceNames = (watch.source_ids || []).map(id => (data.sources || []).find(s => s.id === id)?.name || id).join(', ');
       const watchOffers = (offersByWatch.get(String(watch.id)) || []).slice().sort((a, b) => {
+        const staleOrder = Number(!!a.stale) - Number(!!b.stale);
+        if (staleOrder) return staleOrder;
+        const availabilityOrder = Number(a.availability !== 'in_stock') - Number(b.availability !== 'in_stock');
+        if (availabilityOrder) return availabilityOrder;
         const aTotal = Number.isInteger(a.total_cents) ? a.total_cents : Number.POSITIVE_INFINITY;
         const bTotal = Number.isInteger(b.total_cents) ? b.total_cents : Number.POSITIVE_INFINITY;
         return aTotal - bTotal || (Number(b.checked_at) || 0) - (Number(a.checked_at) || 0);
       });
       const offer = watchOffers[0] || null;
       let productSubline = `${watch.kind === 'discovery' ? 'Entdecken' : 'Exakt'}${watch.query ? ` · ${watch.query}` : ''}${sourceNames ? ` · ${sourceNames}` : ''}`;
-      if (offer) productSubline += ` · ${watchOffers.length > 1 && offer.total_cents != null ? 'Günstigster Treffer: ' : watchOffers.length > 1 ? 'Treffer: ' : ''}${offer.name || watch.name}`;
+      if (offer) {
+        const headline = offer.stale ? 'Letzter bekannter Treffer: ' : watchOffers.length > 1 && offer.total_cents != null ? 'Günstigster Treffer: ' : watchOffers.length > 1 ? 'Treffer: ' : '';
+        productSubline += ` · ${headline}${offer.name || watch.name}`;
+      }
       copy.append(el('small', '', productSubline));
       product.append(monogram, copy);
 
       const priceBox = el('div');
       if (offer) {
         const totalLabel = offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency);
-        priceBox.append(el('span', 'current-price', watchOffers.length > 1 && offer.total_cents != null ? `Ab ${totalLabel}` : totalLabel));
+        const headlinePrice = offer.stale ? `Veraltet · ${totalLabel}` : watchOffers.length > 1 && offer.total_cents != null ? `Ab ${totalLabel}` : totalLabel;
+        priceBox.append(el('span', 'current-price', headlinePrice));
         let detail = `${fmtMoney(offer.price_cents, offer.currency)} Artikel`;
         detail += offer.shipping_cents == null ? ' · Versand unbekannt' : offer.shipping_cents === 0 ? ' · Versand inklusive' : ` · + ${fmtMoney(offer.shipping_cents, offer.currency)} Versand`;
         if (Number.isInteger(offer.comparison_cents) && offer.comparison_cents >= 0) {
@@ -236,7 +244,7 @@
     chips.append(el('span', 'meta-chip', `Quelle: ${offer.source || 'unbekannt'}`));
     const fromFeed = offer.provenance === 'feed' || offer.quality === 'feed_reported';
     chips.append(el('span', `meta-chip${offer.stale ? ' stale' : ''}`, `${offer.stale ? 'Veraltet · ' : ''}${fromFeed ? 'Katalogdaten · ' : ''}${ageText(offer.checked_at)}`));
-    chips.append(el('span', 'meta-chip', `${fromFeed ? 'Feed-Abruf' : 'Geprüft'}: ${fmtTime(offer.checked_at)}`));
+    chips.append(el('span', 'meta-chip', `${fromFeed ? 'Feed-Zeitpunkt' : 'Geprüft'}: ${fmtTime(offer.checked_at)}`));
     if (Number.isInteger(offer.comparison_cents)) chips.append(el('span', 'meta-chip', `Beobachteter Vergleich ${fmtMoney(offer.comparison_cents, offer.currency)}`));
     if (Number.isInteger(offer.savings_cents)) chips.append(el('span', 'meta-chip', `Ersparnis ${fmtMoney(offer.savings_cents, offer.currency)}`));
     if (offer.coupon) chips.append(el('span', 'meta-chip offer-extra', `Gutschein: ${offer.coupon}`));
@@ -457,7 +465,7 @@
       for (const item of observations) {
         const row = document.createElement('tr');
         const fromFeed = item.provenance === 'feed';
-        const values = [`${fromFeed ? 'Feed-Abruf · ' : ''}${fmtTime(item.checked_at)}`, fmtMoney(item.price_cents), item.shipping_cents == null ? 'Unbekannt' : fmtMoney(item.shipping_cents), item.total_cents == null ? 'Unbekannt' : fmtMoney(item.total_cents), availabilityLabel(item.availability, item.provenance), item.provenance || 'Quellenbeobachtung'];
+        const values = [`${fromFeed ? 'Katalog-Beobachtung · ' : ''}${fmtTime(item.checked_at)}`, fmtMoney(item.price_cents), item.shipping_cents == null ? 'Unbekannt' : fmtMoney(item.shipping_cents), item.total_cents == null ? 'Unbekannt' : fmtMoney(item.total_cents), availabilityLabel(item.availability, item.provenance), item.provenance || 'Quellenbeobachtung'];
         values.forEach(value => row.append(el('td', '', value)));
         rows.append(row);
       }
