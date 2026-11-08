@@ -5,6 +5,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
+class SourceIntervals(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    normal_seconds: int = Field(ge=300, le=86400, strict=True)
+    black_friday_seconds: int = Field(ge=300, le=86400, strict=True)
+
+
 class WatchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
@@ -26,6 +32,8 @@ class WatchInput(BaseModel):
     max_price_cents: int | None = Field(default=None, ge=0, strict=True)
     priority: Literal["critical", "high", "normal", "low"] = "normal"
     interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
+    black_friday_interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
+    source_intervals: dict[str, SourceIntervals] = Field(default_factory=dict)
     paused: bool = False
 
     @field_validator("name", "query", "product_id", "url", "gtin", "model", "variant", "category", "manufacturer", mode="before")
@@ -51,6 +59,8 @@ class WatchInput(BaseModel):
             raise ValueError("discovery requires query")
         if (self.product_id or self.url) and len(self.source_ids) != 1:
             raise ValueError("product_id and url require exactly one source")
+        if any(source not in self.source_ids for source in self.source_intervals):
+            raise ValueError("source_intervals must reference selected sources")
         return self
 
 
@@ -84,6 +94,21 @@ class Offer(BaseModel):
     unit_price: str | None = None
     quality: str = "source_reported"
     provenance: str = "live"
+    seller: str = Field(default="", max_length=200)
+    pack_size: str = Field(default="", max_length=200)
+    condition: Literal["new", "used", "refurbished", "unknown"] = "unknown"
+    offer_type: Literal["retail", "reference"] = "retail"
+
+    @field_validator("seller", "pack_size", mode="before")
+    @classmethod
+    def trim_identity(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def reference_has_unknown_shipping(self):
+        if self.offer_type == "reference" and self.shipping_cents is not None:
+            raise ValueError("reference prices cannot claim delivered shipping")
+        return self
 
     @computed_field
     @property
@@ -93,5 +118,8 @@ class Offer(BaseModel):
     @computed_field
     @property
     def key(self) -> str:
-        return json.dumps([self.source, self.merchant, self.product_id, self.variant],
+        parts = [self.source, self.merchant, self.product_id, self.variant]
+        if self.seller or self.pack_size or self.condition != "unknown" or self.offer_type != "retail":
+            parts.extend([self.seller, self.pack_size, self.condition, self.offer_type])
+        return json.dumps(parts,
                           ensure_ascii=False, separators=(",", ":"))

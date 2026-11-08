@@ -92,12 +92,28 @@ def test_json_body_size_and_validation(client):
 
 def test_settings_validation_and_security_headers(client):
     assert client.put('/api/settings', json={'notification_enabled':True}).status_code == 422
-    assert client.put('/api/settings', json={'black_friday_until':time.time()+90000}).status_code == 422
+    assert client.put('/api/settings', json={'black_friday_until':time.time()+90000}).status_code == 200
+    assert client.put('/api/settings', json={'black_friday_until':time.time()+7*86400+3600}).status_code == 422
     assert client.put('/api/settings', json={'paused':'yes'}).status_code == 422
     assert client.put('/api/settings', json={'paused':True}).json()['paused'] is True
     response = client.get('/api/health')
     assert response.json()['status'] == 'ok'
     assert "default-src 'self'" in response.headers['Content-Security-Policy']
+
+
+def test_state_exposes_effective_source_schedule_and_safe_comparisons(client):
+    payload = watch_payload(black_friday_interval_seconds=1200,
+                            source_intervals={'fixture': {'normal_seconds': 5400, 'black_friday_seconds': 600}})
+    created = client.post('/api/watches', json=payload)
+    assert created.status_code == 201
+    state = client.get('/api/state').json()
+    source = state['watches'][0]['effective_source_intervals']['fixture']
+    assert source['normal_seconds'] == 5400
+    assert source['black_friday_seconds'] == 600
+    assert source['effective_seconds'] == 5400
+    assert source['min_interval_seconds'] == 300
+    assert source['next_due'] == state['watches'][0]['next_due']
+    assert state['comparisons'] == []
 
 
 def test_sources_report_their_own_success_and_failure(tmp_path):
@@ -144,7 +160,7 @@ def test_api_healthy_source_keeps_schedule_and_alerts_after_long_restart(tmp_pat
     config = Config(data_dir=tmp_path)
     def app():
         return create_app(config, adapters={'fixture':good, 'bad':bad}, start_scheduler=False)
-    payload = watch_payload(priority='critical')
+    payload = watch_payload(priority='critical', interval_seconds=300, black_friday_interval_seconds=300)
     payload['source_ids'] = ['fixture', 'bad']
     with TestClient(app(), base_url='http://localhost') as c:
         id = c.post('/api/watches', json=payload).json()['id']
@@ -176,8 +192,16 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
 
         async def get_json(self, url, **kwargs):
             self.calls += 1
-            assert url == 'https://modula24.com/feeds/products.de.json'
             assert kwargs['allowed_hosts'] == {'modula24.com'}
+            if url == 'https://modula24.com/products/synthetic-konnektor.json':
+                return {'product': {
+                    'handle': 'synthetic-konnektor', 'title': 'Synthetic Konnektor',
+                    'vendor': 'Modula24', 'product_type': 'Konnektoren',
+                    'options': [{'name': 'Title', 'position': 1}],
+                    'variants': [{'id': 100, 'title': 'Default Title', 'price': self.price.split()[0],
+                                  'available': True, 'option1': 'Default Title'}],
+                }}
+            assert url == 'https://modula24.com/feeds/products.de.json'
             return {'generated': '2026-01-01T00:00:00Z', 'language': 'de', 'currency': 'EUR', 'items': [{
                 'id': 'M24-100', 'variant_id': '100', 'title': 'Synthetic Konnektor',
                 'link': 'https://modula24.com/products/synthetic-konnektor',
@@ -185,6 +209,12 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
                 'product_type': 'Konnektoren', 'options': {},
                 'shipping': [{'countries': ['DE'], 'price': '3.99 EUR'}],
             }]}
+
+        async def post_json_response(self, url, payload, **kwargs):
+            self.calls += 1
+            assert url == 'https://modula24.com/api/checkout/shipping'
+            assert payload == {'country': 'DE', 'items': [{'id': '100', 'qty': 1}], 'currency': 'EUR'}
+            return {'country': 'DE', 'currency': 'EUR', 'shipping_options': [{'id': 'dhl', 'cost': 3.99}]}
 
     catalog = Catalog()
     config = Config(data_dir=tmp_path)
@@ -207,7 +237,7 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
             'source_ids': ['modula24'], 'target_cents': 1500,
         }).json()['id']
         assert c.post(f'/api/watches/{exact}/check', json={}).json()['status'] == 'ok'
-        assert catalog.calls == 1  # discovery and exact share the bounded catalogue cache
+        assert catalog.calls == 3  # discovery feed, targeted product, shipping quote
         state = c.get('/api/state').json()
         assert [e['total_cents'] for e in state['events']] == [1399]
         exact_offer = next(o for o in state['offers'] if o['watch_id'] == exact)
@@ -218,6 +248,6 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
         assert c.post(f'/api/watches/{exact}/check', json={}).json()['status'] == 'ok'
         state = c.get('/api/state').json()
         assert [e['total_cents'] for e in state['events']] == [1199, 1399]
-        assert catalog.calls == 2
+        assert catalog.calls == 5  # restart exact lookup needs no full catalogue
         history = c.get(f"/api/offers/{exact_offer['id']}/history").json()
         assert [h['total_cents'] for h in history] == [1399, 1199]

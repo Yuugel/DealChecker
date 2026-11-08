@@ -2,6 +2,7 @@
 import asyncio
 import json
 import socket
+from types import SimpleNamespace
 
 import pytest
 
@@ -81,6 +82,27 @@ async def test_json_transport_and_per_host_rate_limiting():
     await client.close()
 
 
+async def test_early_timer_wakeup_cannot_shorten_host_deadline(monkeypatch):
+    """Synthetic coarse timer: first wake happens before the requested deadline."""
+    clock = [100.0]
+    sleeps = []
+
+    async def early_sleep(delay):
+        sleeps.append(delay)
+        clock[0] += 1 if len(sleeps) == 1 else delay
+
+    monkeypatch.setattr('dealchecker.network.time', SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr('dealchecker.network.asyncio', SimpleNamespace(Lock=asyncio.Lock, sleep=early_sleep))
+    client = SafeHttpClient(min_interval=10)
+    client._session = Session([Response(), Response()])
+    await client.get_json('https://example.com/feed')
+    await client.get_json('https://example.com/feed')
+    assert clock[0] >= 110, 'second request must wait until the original host deadline'
+    assert sleeps == [10, 9]
+    assert len(client._session.calls) == 2
+    await client.close()
+
+
 async def test_post_204_does_not_require_json_and_errors_do_not_leak_url():
     client = SafeHttpClient(min_interval=0)
     client._session = Session([Response(204, body=b''), Response(401)])
@@ -88,6 +110,21 @@ async def test_post_204_does_not_require_json_and_errors_do_not_leak_url():
     with pytest.raises(ValueError) as exc:
         await client.post_json('https://discord.com/api/webhooks/123/SECRET', {})
     assert 'SECRET' not in str(exc.value)
+    await client.close()
+
+
+async def test_post_json_response_parses_bounded_json_without_changing_notification_post():
+    client = SafeHttpClient(min_interval=0)
+    client._session = Session([Response(body=b'{"currency":"EUR"}'), Response(204, body=b''),
+                               Response(body=b'invalid')])
+    result = await client.post_json_response('https://modula24.com/api/checkout/shipping',
+                                             {'country': 'DE'}, allowed_hosts={'modula24.com'})
+    assert result == {'currency': 'EUR'}
+    await client.post_json('https://discord.com/api/webhooks/123/SECRET', {'content': 'test'})
+    with pytest.raises(ValueError, match='JSON'):
+        await client.post_json_response('https://modula24.com/api/checkout/shipping',
+                                        {}, allowed_hosts={'modula24.com'})
+    assert all(not call[2]['allow_redirects'] for call in client._session.calls)
     await client.close()
 
 

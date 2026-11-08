@@ -31,6 +31,8 @@ In der Adapterregistrierung `build_registry()` ergänzen; Scheduler, Bewertung, 
 
 `Offer` verlangt EUR-Cent als ganze Zahlen, Händler, stabile Produkt-ID, Produktname, sichere Angebotsadresse, Verfügbarkeit, Prüfzeitpunkt und Versandkosten (explizit `None`, wenn unbekannt). Variante, EAN/Modell, Hersteller, Kategorie, Gutschein und Grundpreis nur bei belegten Daten befüllen. Herkunft und Qualitätsstatus müssen ehrlich sein. Kein Rückschluss aus fehlendem Preis auf ein kostenloses Angebot.
 
+Marketplace-Verkäufer in `seller`, Packungsgröße in `pack_size` und Zustand in `condition` getrennt liefern. Diese Felder gehören zur Angebotsidentität; mehrere Verkäufer desselben Produkts dürfen eigene Historien behalten. Aggregierte Preise ohne belegtes Händlerangebot als `offer_type="reference"` mit `shipping_cents=None` liefern; sie erzeugen keinen Kaufpreisalarm. Modula24 demonstriert eine gezielte Produktabfrage, Bestenvergleich eine getrennte Referenzintegration. Partnerfeeds erst nach Freigabe und anhand echter Antworten entwickeln; siehe [Zugangsplan](partner-access.md).
+
 Ein Fehler wird als erklärender `ValueError`/`RuntimeError` ohne Token, URL-Geheimnisse oder vollständigen Antworttext gemeldet. Eine erfolgreiche leere Suche ist kein Netzwerkfehler. Bei mehreren Quellen bleiben erfolgreiche Teilresultate erhalten, während der Auftrag einen sichtbaren Teilfehler meldet. Jede Quelle besitzt je Auftrag eine persistente Wiederholungsplanung: Fehler verlängern nur ihre eigene Frist. Manuelle Prüfungen dürfen gesunde Adapter erneut ansprechen; deren Cache und die Grenzen des gemeinsamen HTTP-Clients bleiben deshalb auch dort verbindlich.
 
 ## Abnahme eines Adapters

@@ -2,11 +2,15 @@
 
 ## Sofort nutzbar: Modula24, physische Möbelteile
 
-Modula24 erlaubt in seiner [eigenen API-Dokumentation](https://modula24.com/pages/api) kostenlose, lesende Zugriffe ohne Anmeldung und nennt Preisvergleiche als Anwendungsfall. Der Standardadapter durchsucht den [deutschen JSON-Produktkatalog](https://modula24.com/feeds/products.de.json) und prüft ausgewählte Varianten beim nächsten Katalogabruf erneut. Es werden keine Shopseiten ausgelesen. Ein Zugangsschlüssel, eine kostenpflichtige API oder eine Partnerschaft sind für diesen dokumentierten Zugang nicht erforderlich.
+Modula24 erlaubt in seiner [eigenen API-Dokumentation](https://modula24.com/pages/api) kostenlose, lesende Zugriffe ohne Anmeldung und nennt Preisvergleiche als Anwendungsfall. Der Standardadapter durchsucht den [deutschen JSON-Produktkatalog](https://modula24.com/feeds/products.de.json) und prüft ausgewählte Varianten gezielt über die dokumentierte Produkt-JSON-Schnittstelle samt lesender DE-Versandabfrage. Nur bei einer reinen, noch nicht aufgelösten Varianten-ID wird einmal der Katalog benötigt. Es werden keine Shopseiten ausgelesen. Ein Zugangsschlüssel, eine kostenpflichtige API oder eine Partnerschaft sind für diesen dokumentierten Zugang nicht erforderlich.
 
 Die Abdeckung umfasst **ausschließlich Möbelteile und Zubehör dieses Händlers**, etwa Kugeln, Konnektoren, Rohre und Tablare. Sie erfüllt einen realen Such- und Überwachungspfad für physische Produkte, deckt aber nicht den allgemeinen deutschen Haushalt-, Elektronik-, Küchen- oder Lebensmittelmarkt ab. Preise und Verfügbarkeit sind Händlerangaben; Versand bezieht sich auf ein Stück nach Deutschland, keine Warenkorb- oder Mengenberechnung. Fehlt dieser Versandpreis, bleibt er unbekannt und verhindert einen Gesamtpreisalarm.
 
 Fünf Minuten Cache, feste Händler-URL und begrenzte Kataloggröße halten den Zugriff kontrolliert. Die einzelnen Angebotslinks und stabilen Varianten-IDs bleiben erhalten. [Technische Grenzen, Datenzeitpunkte und Live-Nachweis](modula24-source.md).
+
+## Sofort nutzbar: Bestenvergleich, breite Preisreferenzen
+
+Der neue Standardadapter nutzt die [freigegebene öffentliche API](https://bestenvergleich.de/entwickler) für Produktsuche und gezielte Produkt-/EAN-Abfragen. Live gefunden wurden Airfryer sowie Bosch-Backofen-/Kochfeldkombinationen. Die API liefert Artikel-Mindestpreise, aber in den geprüften Antworten keine einzelnen Händlerangebote. Versand, Verkäufer und Bestand bleiben daher unbekannt; keine Kaufpreisalarme und kein verifizierter Gesamtpreisvergleich. [Technische Beschreibung und Live-Proben](bestenvergleich-source.md).
 
 ## Sofort nutzbar: Apple App Store Deutschland
 
@@ -22,7 +26,7 @@ Eine exakte Überwachung sollte die `trackId` oder eine deutsche `https://apps.a
 
 Betreiber dürfen einen **bereits autorisierten, öffentlich abrufbaren** HTTPS-Produktfeed beim lokalen Start über die Umgebungs-Konfiguration eintragen. Es gibt keine Oberfläche zum freien Crawlen beliebiger URLs. Feed-URLs mit Zugangsdaten oder Query-Token sind nicht unterstützt. Eine Authentifizierung für private Feeds ist noch nicht implementiert. Der HTTP-Client prüft öffentliche DNS-Ziele, verbietet Weiterleitungen, begrenzt Antworten auf 2 MiB und setzt Timeouts; der Adapter liest einen ganzen endlichen Katalog höchstens alle fünf Minuten neu.
 
-JSON-Schema: Wurzelobjekt mit genau `offers` als Liste. Jede Zeile benötigt `product_id`, `name`, `url`, `price_cents`, `shipping_cents` (ganze nichtnegative Cent oder `null`), `currency` (`EUR`), `availability` (`in_stock`, `out_of_stock`, `unknown`) und `merchant`. Optional sind `variant`, `gtin`, `model`, `manufacturer`, `category`, `coupon`, `unit_price` und `observed_at` (UTC-Epoch-Sekunden). Fehlt `observed_at`, gilt der Abrufzeitpunkt als Katalogbeobachtung; er bestätigt keinen live verfügbaren Lagerbestand. Liegt `observed_at` mehr als zehn Minuten zurück, erhält der Treffer `quality=feed_stale` und darf keinen Alarm auslösen. Weitere Pflichtfelder oder andere Währungen werden nicht stillschweigend umgedeutet. Angebotslinks müssen sichere öffentliche HTTPS-URLs sein.
+JSON-Schema: Wurzelobjekt mit genau `offers` als Liste. Jede Zeile benötigt `product_id`, `name`, `url`, `price_cents`, `shipping_cents` (ganze nichtnegative Cent oder `null`), `currency` (`EUR`), `availability` (`in_stock`, `out_of_stock`, `unknown`) und `merchant`. Optional sind `variant`, `gtin`, `model`, `manufacturer`, `category`, `coupon`, `unit_price`, `seller`, `pack_size`, `condition` (`new`, `used`, `refurbished`, `unknown`), `offer_type` (`retail`, `reference`) und `observed_at` (UTC-Epoch-Sekunden). Fehlt `observed_at`, gilt der Abrufzeitpunkt als Katalogbeobachtung; er bestätigt keinen live verfügbaren Lagerbestand. Liegt `observed_at` mehr als zehn Minuten zurück, erhält der Treffer `quality=feed_stale` und darf keinen Alarm auslösen. Weitere Pflichtfelder oder andere Währungen werden nicht stillschweigend umgedeutet. Angebotslinks müssen sichere öffentliche HTTPS-URLs sein.
 
 Das folgende Beispiel ist **synthetisch** und stellt kein echtes Händlerangebot dar:
 
@@ -47,6 +51,8 @@ Das folgende Beispiel ist **synthetisch** und stellt kein echtes Händlerangebot
 ```
 
 ## Weitere geprüfte Quellen
+
+Die [Phase-2-Matrix mit 20 Händlern/Plattformen](phase2-sources.md) dokumentiert aktuelle technische Proben, Nutzungsbedingungen und Zugriffshürden. [Konkrete Freischaltungsschritte](partner-access.md) priorisieren zugängliche Publisherfeeds. Die folgende Übersicht enthält zusätzlich historische MVP-Kandidaten.
 
 | Quelle | Offizieller Zugangsweg | MVP-Status |
 |---|---|---|

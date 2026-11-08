@@ -5,7 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const byId = (id) => document.getElementById(id);
   const API = '/api';
-  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '', expandedWatches: new Set() };
+  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
   const dialog = byId('watch-dialog');
 
   function el(tag, className, text) {
@@ -93,10 +93,20 @@
     return null;
   }
   function offerState(offer) {
+    if (isReferenceOffer(offer)) return ['warn', 'Referenzpreis · kein Händlerangebot'];
     const evaluation = String(offer?.evaluation || 'Unzureichende Daten');
     if (/Wunschpreis|Bestpreis|Sehr gutes|Preisrückgang/i.test(evaluation)) return ['good', evaluation];
     if (/Unzureichend|Kein relevantes/i.test(evaluation)) return ['warn', evaluation];
     return ['', evaluation];
+  }
+  function isReferenceOffer(offer) {
+    return offer?.provenance === 'reference' || offer?.source === 'bestenvergleich' || offer?.offer_type === 'reference';
+  }
+  function conditionLabel(value) {
+    return ({ new: 'Neu', used: 'Gebraucht', refurbished: 'Generalüberholt', unknown: 'Unbekannt' })[value] || '';
+  }
+  function offerTypeLabel(value) {
+    return ({ retail: 'Händlerangebot', reference: 'Referenzpreis' })[value] || '';
   }
   function renderStats(data) {
     const watches = Array.isArray(data.watches) ? data.watches : [];
@@ -147,6 +157,7 @@
         return aTotal - bTotal || (Number(b.checked_at) || 0) - (Number(a.checked_at) || 0);
       });
       const offer = watchOffers[0] || null;
+      const reference = isReferenceOffer(offer);
       let productSubline = `${watch.kind === 'discovery' ? 'Entdecken' : 'Exakt'}${watch.query ? ` · ${watch.query}` : ''}${sourceNames ? ` · ${sourceNames}` : ''}`;
       if (offer) {
         const headline = offer.stale ? 'Letzter bekannter Treffer: ' : watchOffers.length > 1 && offer.total_cents != null ? 'Günstigster Treffer: ' : watchOffers.length > 1 ? 'Treffer: ' : '';
@@ -157,6 +168,10 @@
 
       const priceBox = el('div');
       if (offer) {
+        if (reference) {
+          priceBox.append(el('span', 'current-price reference-price', `Referenzpreis ${fmtMoney(offer.price_cents, offer.currency)}`));
+          priceBox.append(el('small', 'price-detail', 'Versand/Händler unbekannt · kein Gesamtpreisalarm'));
+        } else {
         const totalLabel = offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency);
         const headlinePrice = offer.stale ? `Veraltet · ${totalLabel}` : watchOffers.length > 1 && offer.total_cents != null ? `Ab ${totalLabel}` : totalLabel;
         priceBox.append(el('span', 'current-price', headlinePrice));
@@ -168,6 +183,7 @@
         }
         const details = el('small', 'price-detail', detail);
         priceBox.append(details);
+        }
       } else {
         priceBox.append(el('span', 'current-price', 'Noch kein Angebot'), el('small', 'price-detail', watch.last_error ? 'Letzte Prüfung mit Fehler' : 'Wird nach erster Prüfung angezeigt'));
       }
@@ -195,6 +211,13 @@
         if (offer.availability) right.append(el('span', 'meta-item', availabilityLabel(offer.availability, offer.provenance)));
       }
       if (watch.paused) right.append(el('span', 'meta-item', 'Pausiert'));
+      const effective = watch.effective_source_intervals || {};
+      for (const [sourceId, intervals] of Object.entries(effective)) {
+        if (!intervals || (!intervals.normal_seconds && !intervals.black_friday_seconds)) continue;
+        const normal = intervals.normal_seconds ? `${Math.round(intervals.normal_seconds / 60)} Min.` : '–';
+        const bf = intervals.black_friday_seconds ? `${Math.round(intervals.black_friday_seconds / 60)} Min.` : '–';
+        right.append(el('span', 'meta-item', `${sourceId}: ${normal} normal · ${bf} BF`));
+      }
       meta.append(left, right);
       card.append(main, meta);
       if (watchOffers.length) {
@@ -212,17 +235,49 @@
         disclosure.append(summary, offerList);
         card.append(disclosure);
       }
+      const comparisons = Array.isArray(data.comparisons) ? data.comparisons : [];
+      const ids = new Set(watchOffers.map(item => Number(item.id)));
+      const matching = comparisons.filter(group => {
+        if (!Array.isArray(group.offer_ids)) return false;
+        if (!group.offer_ids.some(id => ids.has(Number(id)))) return false;
+        const matched = (Array.isArray(data.offers) ? data.offers : []).filter(item => group.offer_ids.some(id => Number(id) === Number(item.id)));
+        return new Set(matched.map(item => item.merchant || item.seller || item.source)).size > 1;
+      });
+      if (matching.length) {
+        const compare = el('section', 'comparison-block');
+        compare.append(el('strong', '', 'Quellenübergreifender Produktvergleich'));
+        for (const group of matching) {
+          const matched = (Array.isArray(data.offers) ? data.offers : []).filter(item => group.offer_ids.some(id => Number(id) === Number(item.id)));
+          const groupNode = el('div', 'comparison-group');
+          groupNode.append(el('small', '', `${group.identity_basis === 'gtin' ? 'GTIN' : 'Hersteller + Modell'} ${group.identity_value} · niedrigster Gesamtpreis ${fmtMoney(group.lowest_total_cents)}`));
+          matched.forEach(item => {
+            const line = el('div', 'comparison-offer');
+            const label = [item.name, item.seller || item.merchant || 'Händler unbekannt', item.pack_size, conditionLabel(item.condition)].filter(Boolean).join(' · ');
+            line.append(el('span', '', label), el('strong', '', item.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(item.total_cents)));
+            line.append(el('small', '', ageText(item.checked_at)));
+            const itemUrl = safeHttpUrl(item.url);
+            if (itemUrl) { const link = el('a', '', 'Angebot ↗'); link.href = itemUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; line.append(link); }
+            groupNode.append(line);
+          });
+          compare.append(groupNode);
+        }
+        card.append(compare);
+      }
       list.append(card);
     });
   }
   function renderOffer(offer, watch) {
+    const reference = isReferenceOffer(offer);
     const row = el('article', 'individual-offer');
     const heading = el('div', 'individual-offer-heading');
     const title = el('div', 'individual-offer-title');
     title.append(el('strong', '', offer.name || 'Unbenanntes Produkt'));
-    title.append(el('small', '', offer.merchant || 'Händler unbekannt'));
+    title.append(el('small', '', reference ? 'Händler unbekannt' : offer.seller || offer.merchant || 'Händler unbekannt'));
     heading.append(title);
     const actions = el('div', 'individual-offer-actions');
+    const exact = el('button', 'small-action', 'Exakt beobachten'); exact.type = 'button';
+    exact.addEventListener('click', () => openWatchEditor(null, offer));
+    actions.append(exact);
     const history = el('button', 'small-action', 'Verlauf');
     history.type = 'button';
     history.setAttribute('aria-label', `Preisverlauf für ${offer.name || 'dieses Angebot'} anzeigen`);
@@ -236,11 +291,17 @@
     }
     heading.append(actions);
     const price = el('div', 'individual-offer-price');
-    price.append(el('strong', 'offer-total', offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency)));
-    price.append(el('span', '', `${fmtMoney(offer.price_cents, offer.currency)} Artikel`));
-    price.append(el('span', '', offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`));
+    price.append(el('strong', reference ? 'offer-total reference-price' : 'offer-total', reference ? `Referenzpreis ${fmtMoney(offer.price_cents, offer.currency)}` : offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency)));
+    if (!reference) {
+      price.append(el('span', '', `${fmtMoney(offer.price_cents, offer.currency)} Artikel`));
+      price.append(el('span', '', offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`));
+    } else price.append(el('span', 'reference-caveat', 'Versand/Händler unbekannt · kein Gesamtpreisalarm'));
     const chips = el('div', 'individual-offer-meta');
     chips.append(el('span', 'meta-chip', availabilityLabel(offer.availability, offer.provenance)));
+    if (offer.seller) chips.append(el('span', 'meta-chip', `Verkäufer: ${offer.seller}`));
+    if (offer.pack_size) chips.append(el('span', 'meta-chip', `Packung: ${offer.pack_size}`));
+    if (conditionLabel(offer.condition)) chips.append(el('span', 'meta-chip', `Zustand: ${conditionLabel(offer.condition)}`));
+    if (offerTypeLabel(offer.offer_type)) chips.append(el('span', 'meta-chip', `Angebotstyp: ${offerTypeLabel(offer.offer_type)}`));
     chips.append(el('span', 'meta-chip', `Quelle: ${offer.source || 'unbekannt'}`));
     const fromFeed = offer.provenance === 'feed' || offer.quality === 'feed_reported';
     chips.append(el('span', `meta-chip${offer.stale ? ' stale' : ''}`, `${offer.stale ? 'Veraltet · ' : ''}${fromFeed ? 'Katalogdaten · ' : ''}${ageText(offer.checked_at)}`));
@@ -249,6 +310,7 @@
     if (Number.isInteger(offer.savings_cents)) chips.append(el('span', 'meta-chip', `Ersparnis ${fmtMoney(offer.savings_cents, offer.currency)}`));
     if (offer.coupon) chips.append(el('span', 'meta-chip offer-extra', `Gutschein: ${offer.coupon}`));
     if (offer.unit_price) chips.append(el('span', 'meta-chip offer-extra', `Grundpreis: ${offer.unit_price}`));
+    if (reference) chips.append(el('span', 'meta-chip reference-chip', 'Evaluation: Referenzpreis'));
     row.append(heading, price, chips);
     return row;
   }
@@ -311,6 +373,9 @@
     byId('setting-paused').checked = !!settings.paused;
     const until = Number(settings.black_friday_until || 0);
     byId('setting-bf').checked = until > Date.now() / 1000;
+    if (until > Date.now() / 1000) state.bfDurationDraft = until - Date.now() / 1000 > 86400 ? 604800 : 86400;
+    byId('setting-bf-duration').value = String(state.bfDurationDraft);
+    byId('setting-bf-duration').disabled = false;
     byId('bf-status').textContent = until > Date.now() / 1000 ? `Aktiv bis ${fmtTime(until)}.` : 'Der Modus ist nicht aktiv.';
     const configured = !!data.notification_configured;
     byId('setting-notifications').checked = !!settings.notification_enabled;
@@ -347,6 +412,8 @@
     byId('watch-category').value = ''; byId('watch-manufacturer').value = '';
     byId('watch-synonyms').value = ''; byId('watch-exclusions').value = '';
     byId('watch-merchants-include').value = ''; byId('watch-merchants-exclude').value = '';
+    byId('watch-bf-interval').value = '';
+    state.sourceIntervalDraft = {};
     byId('watch-form-error').textContent = '';
     buildSourceOptions(state.data?.sources || []);
   }
@@ -359,11 +426,36 @@
     for (const source of available) {
       const label = el('label', 'source-check');
       const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = source.configured === false && !selected.includes(source.id);
+      input.addEventListener('change', () => renderSourceIntervalOptions());
       label.append(input, document.createTextNode(source.name || source.id)); root.append(label);
     }
     if (!sources.length) root.append(el('span', 'field-help', 'Der Dienst meldet noch keine verfügbaren Quellen.'));
+    renderSourceIntervalOptions();
   }
-  function openWatchEditor(watch = null) {
+  function renderSourceIntervalOptions() {
+    const root = byId('source-interval-options');
+    if (!root) return;
+    root.replaceChildren();
+    const ids = $$('input[name="watch-source"]:checked').map(input => input.value);
+    if (!ids.length) { root.append(el('small', '', 'Wähle zuerst eine Quelle.')); return; }
+    for (const id of ids) {
+      const entry = state.sourceIntervalDraft[id] || {};
+      const row = el('div', 'source-interval-row');
+      row.append(el('strong', '', (state.data?.sources || []).find(source => source.id === id)?.name || id));
+      for (const [key, label] of [['normal_seconds', 'Normal (Sek.)'], ['black_friday_seconds', 'Black Friday (Sek.)']]) {
+        const field = el('label', 'source-interval-input', label);
+        const input = document.createElement('input'); input.type = 'number'; input.min = '300'; input.max = '86400'; input.step = '1'; input.placeholder = 'Automatisch'; input.value = entry[key] == null ? '' : String(entry[key]); input.dataset.sourceId = id; input.dataset.intervalKey = key;
+        input.addEventListener('input', () => {
+          const draft = { ...(state.sourceIntervalDraft[id] || {}) };
+          if (input.value.trim() === '') delete draft[key]; else draft[key] = Number(input.value);
+          if (Object.keys(draft).length) state.sourceIntervalDraft[id] = draft; else delete state.sourceIntervalDraft[id];
+        });
+        field.append(input); row.append(field);
+      }
+      root.append(row);
+    }
+  }
+  function openWatchEditor(watch = null, offer = null) {
     clearForm();
     byId('watch-dialog-title').textContent = watch ? 'Beobachtung bearbeiten' : 'Neue Beobachtung';
     byId('watch-save').textContent = watch ? 'Änderungen speichern' : 'Beobachtung speichern';
@@ -388,9 +480,26 @@
       byId('watch-max').value = watch.max_price_cents == null ? '' : (watch.max_price_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-priority').value = watch.priority || 'normal';
       byId('watch-interval').value = watch.interval_seconds == null ? '' : watch.interval_seconds;
+      byId('watch-bf-interval').value = watch.black_friday_interval_seconds == null ? '' : watch.black_friday_interval_seconds;
+      state.sourceIntervalDraft = JSON.parse(JSON.stringify(watch.source_intervals || {}));
+      renderSourceIntervalOptions();
       byId('watch-paused').checked = !!watch.paused;
     } else {
       buildSourceOptions(state.data?.sources || [], ['apple']);
+    }
+    if (offer) {
+      const sourceId = String(offer.source || '');
+      byId('watch-dialog-title').textContent = 'Angebot exakt beobachten';
+      byId('watch-name').value = offer.name || '';
+      const exact = $('input[name="watch-kind"][value="exact"]'); if (exact) exact.checked = true;
+      byId('watch-query').value = '';
+      buildSourceOptions(state.data?.sources || [], [sourceId]);
+      byId('watch-product-id').value = offer.product_id || '';
+      byId('watch-url').value = offer.url || '';
+      byId('watch-gtin').value = offer.gtin || '';
+      byId('watch-model').value = offer.model || '';
+      byId('watch-variant').value = offer.variant || '';
+      byId('watch-manufacturer').value = offer.manufacturer || '';
     }
     dialog.showModal();
     byId('watch-name').focus();
@@ -401,8 +510,23 @@
     const rawInterval = byId('watch-interval').value.trim();
     const interval = rawInterval ? Number(rawInterval) : null;
     if (interval !== null && (!Number.isSafeInteger(interval) || interval < 300 || interval > 86400)) throw new Error('Prüfintervall muss zwischen 300 und 86400 Sekunden liegen.');
+    const rawBfInterval = byId('watch-bf-interval').value.trim();
+    const bfInterval = rawBfInterval ? Number(rawBfInterval) : null;
+    if (bfInterval !== null && (!Number.isSafeInteger(bfInterval) || bfInterval < 300 || bfInterval > 86400)) throw new Error('Black-Friday-Intervall muss zwischen 300 und 86400 Sekunden liegen.');
     const sourceIds = $$('input[name="watch-source"]:checked').map(input => input.value);
     if (!sourceIds.length) throw new Error('Bitte mindestens eine konfigurierte Quelle auswählen.');
+    const sourceIntervals = {};
+    for (const sourceId of sourceIds) {
+      const entry = state.sourceIntervalDraft[sourceId] || {};
+      const normal = entry.normal_seconds;
+      const blackFriday = entry.black_friday_seconds;
+      if (normal == null && blackFriday == null) continue;
+      if (normal == null || blackFriday == null) throw new Error(`Für ${sourceId} bitte beide quellenspezifischen Intervalle ausfüllen oder beide Felder leeren.`);
+      for (const value of [normal, blackFriday]) {
+        if (!Number.isSafeInteger(value) || value < 300 || value > 86400) throw new Error(`Quellenintervall für ${sourceId} muss zwischen 300 und 86400 Sekunden liegen.`);
+      }
+      sourceIntervals[sourceId] = { normal_seconds: normal, black_friday_seconds: blackFriday };
+    }
     if ((byId('watch-product-id').value.trim() || byId('watch-url').value.trim()) && sourceIds.length !== 1) throw new Error('Produkt-ID oder URL benötigt genau eine Quelle.');
     const url = byId('watch-url').value.trim();
     if (url && !safeHttpUrl(url)) throw new Error('Produkt-URL muss eine gültige HTTP- oder HTTPS-Adresse ohne Zugangsdaten sein.');
@@ -415,7 +539,8 @@
       synonyms: splitList(byId('watch-synonyms').value, 5), category: byId('watch-category').value.trim(), manufacturer: byId('watch-manufacturer').value.trim(),
       exclusions: splitList(byId('watch-exclusions').value), merchants_include: splitList(byId('watch-merchants-include').value), merchants_exclude: splitList(byId('watch-merchants-exclude').value),
       target_cents: target, max_price_cents: max,
-      priority: byId('watch-priority').value, interval_seconds: interval, paused: byId('watch-paused').checked,
+      priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
+      source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
     };
   }
   async function saveWatch(event) {
@@ -458,7 +583,8 @@
   async function showHistory(offer, watch) {
     const historyDialog = byId('history-dialog');
     byId('history-title').textContent = `Preisverlauf · ${offer.name || watch.name || 'Produkt'}`;
-    byId('history-subtitle').textContent = `${offer.merchant || offer.source || 'Quelle'} · Gesamtpreis nur bei bekanntem Versand`;
+    const isReference = isReferenceOffer(offer);
+    byId('history-subtitle').textContent = isReference ? 'Referenzpreis ohne Versand · kein Händlerangebot und kein Gesamtpreis' : `${offer.merchant || offer.source || 'Quelle'} · Gesamtpreis nur bei bekanntem Versand`;
     const rows = byId('history-rows'); rows.replaceChildren();
     byId('history-chart').replaceChildren();
     try {
@@ -471,7 +597,7 @@
         values.forEach(value => row.append(el('td', '', value)));
         rows.append(row);
       }
-      renderChart(observations);
+      renderChart(observations, isReference);
       if (!observations.length) rows.append(emptyTableRow('Für dieses Angebot liegen noch keine gespeicherten Beobachtungen vor.'));
     } catch (error) { rows.append(emptyTableRow(`Verlauf konnte nicht geladen werden: ${error.message}`)); showChartNote('Verlauf konnte nicht geladen werden.'); }
     historyDialog.showModal();
@@ -488,16 +614,17 @@
     const svg = svgEl('svg', { viewBox: '0 0 700 220', role: 'img', 'aria-label': message });
     const text = svgEl('text', { x: 350, y: 112, 'text-anchor': 'middle', class: 'chart-note' }); text.textContent = message; svg.append(text); root.append(svg);
   }
-  function renderChart(observations) {
-    const known = observations.filter(item => Number.isInteger(item.total_cents) && item.total_cents >= 0 && Number.isFinite(item.checked_at)).sort((a, b) => a.checked_at - b.checked_at);
-    if (known.length < 2) { showChartNote(known.length === 1 ? 'Eine Gesamtpreisbeobachtung: Für einen Verlauf sind mindestens zwei nötig.' : 'Noch keine ausreichenden Daten mit bekanntem Gesamtpreis.'); return; }
+  function renderChart(observations, reference = false) {
+    const valueKey = reference ? 'price_cents' : 'total_cents';
+    const known = observations.filter(item => Number.isInteger(item[valueKey]) && item[valueKey] >= 0 && Number.isFinite(item.checked_at)).sort((a, b) => a.checked_at - b.checked_at);
+    if (known.length < 2) { showChartNote(known.length === 1 ? `${reference ? 'Eine Referenzpreis-' : 'Eine Gesamtpreis-'}beobachtung: Für einen Verlauf sind mindestens zwei nötig.` : `Noch keine ausreichenden Daten mit bekanntem ${reference ? 'Referenzpreis' : 'Gesamtpreis'}.`); return; }
     const width = 700, height = 220, pad = { left: 64, right: 20, top: 20, bottom: 37 };
     const minT = known[0].checked_at, maxT = known[known.length - 1].checked_at;
-    let minP = Math.min(...known.map(item => item.total_cents)), maxP = Math.max(...known.map(item => item.total_cents));
+    let minP = Math.min(...known.map(item => item[valueKey])), maxP = Math.max(...known.map(item => item[valueKey]));
     if (minP === maxP) { minP = Math.max(0, minP - 100); maxP += 100; }
     const x = (item) => pad.left + (maxT === minT ? .5 : (item.checked_at - minT) / (maxT - minT)) * (width - pad.left - pad.right);
-    const y = (item) => pad.top + (1 - (item.total_cents - minP) / (maxP - minP)) * (height - pad.top - pad.bottom);
-    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `Beobachteter Gesamtpreis in ${known.length} Messungen; von ${fmtMoney(known[0].total_cents)} bis ${fmtMoney(known[known.length - 1].total_cents)}.` });
+    const y = (item) => pad.top + (1 - (item[valueKey] - minP) / (maxP - minP)) * (height - pad.top - pad.bottom);
+    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `Beobachteter ${reference ? 'Referenzpreis ohne Versand' : 'Gesamtpreis'} in ${known.length} Messungen; von ${fmtMoney(known[0][valueKey])} bis ${fmtMoney(known[known.length - 1][valueKey])}.` });
     for (let i = 0; i < 4; i++) {
       const ratio = i / 3, gy = pad.top + ratio * (height - pad.top - pad.bottom);
       svg.append(svgEl('line', { x1: pad.left, x2: width - pad.right, y1: gy, y2: gy, class: 'chart-grid' }));
@@ -509,7 +636,7 @@
     svg.append(svgEl('polygon', { points: area, class: 'chart-area' }));
     svg.append(svgEl('polyline', { points, class: 'chart-line' }));
     known.forEach((item) => {
-      const circle = svgEl('circle', { cx: x(item), cy: y(item), r: 4.5, class: 'chart-point' }); circle.setAttribute('aria-label', `${fmtTime(item.checked_at)}: ${fmtMoney(item.total_cents)}`); svg.append(circle);
+      const circle = svgEl('circle', { cx: x(item), cy: y(item), r: 4.5, class: 'chart-point' }); circle.setAttribute('aria-label', `${fmtTime(item.checked_at)}: ${fmtMoney(item[valueKey])}${reference ? ' Referenzpreis ohne Versand' : ''}`); svg.append(circle);
     });
     const first = svgEl('text', { x: pad.left, y: height - 11 }); first.textContent = fmtTime(minT, { dateStyle: 'short', timeStyle: undefined }); svg.append(first);
     const last = svgEl('text', { x: width - pad.right, y: height - 11, 'text-anchor': 'end' }); last.textContent = fmtTime(maxT, { dateStyle: 'short', timeStyle: undefined }); svg.append(last);
@@ -534,7 +661,17 @@
     byId('refresh-button').addEventListener('click', () => refresh(true));
     byId('activity-refresh').addEventListener('click', () => refresh(true));
     byId('setting-paused').addEventListener('change', event => updateSettings('paused', event.target.checked, event.target.checked ? 'Automatische Prüfungen pausiert.' : 'Automatische Prüfungen fortgesetzt.'));
-    byId('setting-bf').addEventListener('change', event => updateSettings('black_friday_until', event.target.checked ? Math.floor(Date.now() / 1000) + 86400 : 0, event.target.checked ? '24‑Stunden‑Modus für 24 Stunden aktiviert.' : '24‑Stunden‑Modus beendet.'));
+    byId('setting-bf').addEventListener('change', event => {
+      const duration = state.bfDurationDraft;
+      updateSettings('black_friday_until', event.target.checked ? Math.floor(Date.now() / 1000) + duration : 0, event.target.checked ? `Black-Friday-Modus für ${duration === 604800 ? '7 Tage' : '24 Stunden'} aktiviert.` : 'Black-Friday-Modus beendet.');
+    });
+    byId('setting-bf-duration').addEventListener('change', () => {
+      state.bfDurationDraft = Number(byId('setting-bf-duration').value || 86400);
+      if (byId('setting-bf').checked) {
+        const duration = state.bfDurationDraft;
+        updateSettings('black_friday_until', Math.floor(Date.now() / 1000) + duration, `Black-Friday-Modusdauer auf ${duration === 604800 ? '7 Tage' : '24 Stunden'} gesetzt.`);
+      }
+    });
     byId('setting-notifications').addEventListener('change', event => updateSettings('notification_enabled', event.target.checked, event.target.checked ? 'Benachrichtigungen aktiviert.' : 'Benachrichtigungen deaktiviert.'));
     $$('.nav-link').forEach(link => link.addEventListener('click', () => { $$('.nav-link').forEach(item => item.classList.toggle('active', item === link)); }));
   }

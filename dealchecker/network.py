@@ -85,14 +85,16 @@ class SafeHttpClient:
             )
         return self._session
 
-    async def _request(self, method, url, *, payload=None, allowed_hosts=None, max_body=MAX_BODY):
+    async def _request(self, method, url, *, payload=None, allowed_hosts=None, max_body=MAX_BODY,
+                       parse_response=True):
         if isinstance(max_body, bool) or not isinstance(max_body, int) or not 1 <= max_body <= MAX_OPT_IN_BODY:
             raise ValueError('Ungültiges Antwort-Limit')
         host = validate_url(url, allowed_hosts)
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
-            wait = self._next.get(host, 0) - time.monotonic()
-            if wait > 0:
+            # Event-loop timers can wake early (notably coarse Windows clocks).
+            # Recheck the deadline while holding the host lock before any I/O.
+            while (wait := self._next.get(host, 0) - time.monotonic()) > 0:
                 await asyncio.sleep(wait)
             self._next[host] = time.monotonic() + self.min_interval
             try:
@@ -112,7 +114,7 @@ class SafeHttpClient:
                         data.extend(chunk)
                         if len(data) > max_body:
                             raise ValueError('Antwort überschreitet das konfigurierte Limit')
-                    if method == 'POST':
+                    if not parse_response:
                         return None
                     try:
                         result = json.loads(data)
@@ -130,7 +132,15 @@ class SafeHttpClient:
         return await self._request('GET', url, allowed_hosts=allowed_hosts, max_body=max_body)
 
     async def post_json(self, url: str, payload: dict, *, allowed_hosts: set[str] | None = None):
-        await self._request('POST', url, payload=payload, allowed_hosts=allowed_hosts)
+        await self._request('POST', url, payload=payload, allowed_hosts=allowed_hosts,
+                            parse_response=False)
+
+    async def post_json_response(self, url: str, payload: dict, *,
+                                 allowed_hosts: set[str] | None = None,
+                                 max_body: int = MAX_BODY):
+        """Read a documented JSON response to a read-only POST API operation."""
+        return await self._request('POST', url, payload=payload, allowed_hosts=allowed_hosts,
+                                   max_body=max_body)
 
     async def close(self):
         if self._session is not None:

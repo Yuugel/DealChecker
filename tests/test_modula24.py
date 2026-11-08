@@ -9,8 +9,9 @@ from dealchecker.models import WatchInput
 
 
 class FakeClient:
-    def __init__(self, responses):
+    def __init__(self, responses, quotes=()):
         self.responses = list(responses)
+        self.quotes = list(quotes)
         self.calls = []
 
     async def get_json(self, url, *, allowed_hosts=None, max_body=None):
@@ -19,6 +20,22 @@ class FakeClient:
         if isinstance(result, Exception):
             raise result
         return result
+
+    async def post_json_response(self, url, payload, *, allowed_hosts=None):
+        self.calls.append((url, allowed_hosts, payload))
+        return self.quotes.pop(0)
+
+
+def product(*, price="2.50"):
+    return {"product": {"handle": "rohr-ohne-bohrung", "title": "Rohr ohne Bohrung", "vendor": "Modula24",
+                        "product_type": "Rohre", "options": [{"name": "Länge", "position": 1}],
+                        "variants": [
+                            {"id": 123, "title": "100 mm", "price": price, "available": True, "option1": "100"},
+                            {"id": 456, "title": "125 mm", "price": price, "available": True, "option1": "125"}]}}
+
+
+def quote():
+    return {"country": "DE", "currency": "EUR", "shipping_options": [{"id": "dhl", "cost": "5.22"}]}
 
 
 def row(variant_id="123", **updates):
@@ -67,7 +84,7 @@ async def test_feed_variant_url_is_preserved_when_identity_matches():
 @pytest.mark.asyncio
 async def test_exact_id_and_url_disambiguate_variants_and_conflicts_fail():
     rows = [row(), row("456", title="Rohr ohne Bohrung - 125 mm", options={"Länge": "125"})]
-    adapter = Modula24Adapter(FakeClient([feed(*rows)]))
+    adapter = Modula24Adapter(FakeClient([feed(*rows), product()], [quote()]))
     result = await adapter.lookup(WatchInput(name="Rohr", product_id="456", source_ids=["modula24"]))
     assert [offer.product_id for offer in result] == ["456"]
     result = await adapter.lookup(WatchInput(name="Rohr", url=result[0].url, source_ids=["modula24"]))
@@ -78,7 +95,7 @@ async def test_exact_id_and_url_disambiguate_variants_and_conflicts_fail():
 
 @pytest.mark.asyncio
 async def test_cache_singleflight_preserves_observation_and_refreshes_after_expiry():
-    client = FakeClient([feed(row()), feed(row(price="1.50 EUR"))])
+    client = FakeClient([feed(row()), product(price="1.50")], [quote()])
     adapter = Modula24Adapter(client)
     first, second = await asyncio.gather(adapter.search(discovery()), adapter.search(discovery()))
     assert len(client.calls) == 1
@@ -86,7 +103,7 @@ async def test_cache_singleflight_preserves_observation_and_refreshes_after_expi
     assert (await adapter.search(discovery()))[0].checked_at == first[0].checked_at
     adapter._expires = 0
     refreshed = await adapter.lookup(WatchInput(name="Rohr", product_id="123", source_ids=["modula24"]))
-    assert refreshed[0].price_cents == 150 and len(client.calls) == 2
+    assert refreshed[0].price_cents == 150 and len(client.calls) == 3
     assert refreshed[0].checked_at >= first[0].checked_at
 
 

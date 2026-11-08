@@ -52,6 +52,8 @@ def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: 
     previous = [h["total_cents"] for h in history if h["total_cents"] is not None and h["availability"] == "in_stock"]
     comparison = min(previous) if previous else None
     savings = max(0, comparison - offer.total_cents) if comparison is not None and offer.total_cents is not None else None
+    if offer.offer_type == "reference":
+        return "Referenzpreis", comparison, None, None
     if offer.total_cents is None or offer.availability != "in_stock":
         return "Unzureichende Daten", comparison, savings, None
     fresh = now - offer.checked_at <= 2 * interval_seconds and offer.checked_at <= now + 60 and offer.quality != "feed_stale"
@@ -81,6 +83,8 @@ class Engine:
     def __init__(self, db: Database, adapters: dict, notifier=None):
         self.db = db
         self.adapters = adapters
+        self.db.sync_source_minimums({source: getattr(adapter, "min_interval_seconds", 0)
+                                      for source, adapter in adapters.items()})
         self.notifier = notifier
         self._running: set[int] = set()
         self._tasks: set[asyncio.Task] = set()
@@ -177,7 +181,7 @@ class Engine:
             return {"status": "missing", "offers": 0, "error": None}
         if latest["paused"] or self.db.get_settings()["paused"]:
             return {"status": "paused", "offers": 0, "error": None}
-        if latest != row:
+        if any(latest[field] != row[field] for field in WatchInput.model_fields):
             return {"status": "error", "offers": 0, "error": "watch changed during check"}
         now = time.time()
         unique = {}
@@ -199,7 +203,9 @@ class Engine:
         observations = []
         for item in unique.values():
             history, last_alert, _ = self.db.prior(id, item.key)
-            observations.append((item, *_evaluate(watch, item, history, last_alert, interval(row, self.db.get_settings()), now)))
+            minimum = max(schedules[item.source]["min_interval_seconds"], outcomes[item.source][1])
+            cadence = interval(row, self.db.get_settings(), item.source, minimum, now)
+            observations.append((item, *_evaluate(watch, item, history, last_alert, cadence, now)))
         for source in watch.source_ids:
             if source not in outcomes and schedules[source]["last_error"]:
                 errors.append(f"{source}: {schedules[source]['last_error']}")

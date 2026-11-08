@@ -2,7 +2,7 @@
 
 Lokale Preisüberwachung mit echter Produktsuche, nachvollziehbaren Preisverläufen und optionalen Discord-Alarmen. Python, SQLite und eine deutsche Weboberfläche; kein Cloudkonto und keine KI erforderlich.
 
-**Tatsächliche Abdeckung:** Direkt einsatzbereit sind **Modula24 für physische Möbelteile und Zubehör** sowie der **deutsche Apple App Store für Apps und Spiele mit ausgewiesenem Kaufpreis**. Modula24 liefert einen ausdrücklich freigegebenen EUR-Produktkatalog mit Varianten und Versandkosten für ein Stück nach Deutschland. Das ist eine schmale Händlerabdeckung, keine allgemeine Suche nach Haushaltsgeräten, Elektronik, Küchenzubehör oder Lebensmitteln. Amazon, MediaMarkt, Saturn, OTTO, idealo, Geizhals, Keepa und mydealz sind **nicht als fertige Händleradapter integriert**. Weitere autorisierte JSON-Kataloge können angeschlossen werden. [Quellen und Zugangsvoraussetzungen](docs/sources.md).
+**Tatsächliche Abdeckung:** **Modula24** liefert echte Möbelteile/Zubehör samt Varianten und Versand nach Deutschland. **Apple App Store DE** liefert App-Kaufpreise. Neu: **Bestenvergleich** entdeckt Produkte aus Elektronik, Haushalt und Küche und verfolgt deren Preisreferenzen gezielt. Diese API nennt keinen verifizierten Händler, Versand oder Bestand: Referenzen lösen **keine Kaufpreisalarme** aus. Amazon, MediaMarkt, Saturn, OTTO und andere große Händler sind ohne Partnerfreigabe weiterhin nicht angebunden. Weitere autorisierte JSON-Feeds werden unterstützt. [20 geprüfte Händler/Plattformen](docs/phase2-sources.md) · [Quellen und Grenzen](docs/sources.md).
 
 ## Windows: starten
 
@@ -23,9 +23,9 @@ python -m venv .venv
 
 ## Erster Suchauftrag
 
-„Überwachung hinzufügen“ → „Dynamische Suche“ → beispielsweise **Konnektor** oder **Kugel** → nur Quelle **Modula24** auswählen → speichern und „Jetzt prüfen“. Für Apps beispielsweise **Monument Valley** und „Apple App Store DE“ verwenden. Neue Treffer stammen aus einer erneuten Quellensuche; sie müssen vorher nicht als URLs gespeichert sein.
+„Überwachung hinzufügen“ → „Dynamische Suche“ → beispielsweise **Konnektor** oder **Kugel** → nur Quelle **Modula24** auswählen → speichern und „Jetzt prüfen“. Für Apps beispielsweise **Monument Valley** und „Apple App Store DE“ verwenden. Für Geräte **Airfryer** oder **Bosch** mit „Bestenvergleich · Preisreferenzen“ suchen und das Preislimit leer lassen. Neue Treffer stammen aus einer erneuten Quellensuche; sie müssen vorher nicht als URLs gespeichert sein.
 
-Bei Modula24 kann ein gefundenes Produkt anschließend mit seiner **numerischen Varianten-ID**, etwa `58436517069064`, oder dem vollständigen Angebotslink einschließlich `variant` exakt überwacht werden. Die Produkt-ID in DealChecker entspricht der `variant_id` des Feeds; dessen `M24-…`-Artikelkennung und Lager-SKUs einer anderen API sind keine Ersatz-IDs. [Details und Grenzen](docs/modula24-source.md).
+Über **„Exakt beobachten“** am Treffer werden Quelle und Produktidentität direkt übernommen. Bei Modula24 kann ein gefundenes Produkt anschließend mit seiner **numerischen Varianten-ID**, etwa `58436517069064`, oder dem vollständigen Angebotslink einschließlich `variant` exakt überwacht werden. Die Produkt-ID in DealChecker entspricht der `variant_id` des Feeds; dessen `M24-…`-Artikelkennung und Lager-SKUs einer anderen API sind keine Ersatz-IDs. [Details und Grenzen](docs/modula24-source.md).
 
 Für eine exakte Überwachung die numerische **App-ID** oder die deutsche `https://apps.apple.com/de/.../id…`-Produktadresse verwenden. Alternativ den vollständigen Produktnamen in **Suchanfrage** eintragen: Er wird nur bei einem eindeutigen, exakt passenden Titel akzeptiert. Der Anzeigename ist eine eigene Bezeichnung für die Überwachung. Apple unterstützt keine EAN-, Modell- oder Variantenprüfung. Für physische Produkte unterstützen entsprechend ausgestattete Händlerfeeds diese Felder.
 
@@ -35,8 +35,9 @@ Wunschpreise und Preisgrenzen gelten für den **Gesamtpreis einschließlich beka
 
 - Exakte Überwachung und eigenständige Discovery mit bis zu fünf Synonymen, Kategorien, Hersteller- und Ausschlussfiltern.
 - Mehrere Angebote, persistente Beobachtungen, Preisdiagramm und lokale Ereignisübersicht.
-- Prioritäten mit 5/15/30/60 Minuten, eigene Intervalle ab 5 Minuten, Pause, Sofortprüfung und getrenntem Fehler-Backoff je Quelle und Auftrag.
-- Black-Friday-Modus für maximal 24 Stunden; halbierte Intervalle mit 5-Minuten-Untergrenze. Quellencache und Anbieterlimits bleiben verbindlich.
+- Breite Suche standardmäßig alle 8 Stunden; bekannte Produkte normal alle 2 Stunden, wichtige alle 30–45 Minuten. Normal- und Black-Week-Intervalle sind je Auftrag und Quelle konfigurierbar. Bestehende Aufträge behalten ihren bisherigen Takt.
+- Black-Friday-Modus für 24 Stunden oder bis zu 7 Tage: Suche alle 3 Stunden, exakte Produkte je Priorität alle 5–60 Minuten. Quellencache und Anbieterlimits bleiben verbindlich; Fehler-Backoff bleibt je Quelle isoliert.
+- Konservativer Händlervergleich für frische, lieferbare Angebote mit belegter Produktidentität und bekanntem Gesamtpreis; getrennte Historien für Verkäufer, Varianten, Zustand und Packungsgröße.
 - Quellenfehler und veraltete Angebote sichtbar; fehlgeschlagene Prüfungen löschen die letzte Preisbeobachtung nicht.
 - Deterministische Bewertung aus tatsächlich beobachteten Preisen. Keine erfundenen Marktpreise oder UVP-Rabatte.
 - Discord-Webhook mit dauerhafter Versandwarteschlange und unterdrückten Wiederholungsmeldungen.
@@ -56,7 +57,7 @@ Umgebungsvariablen vor dem Start setzen:
 
 Zugangsdaten gehören weder ins Repository noch in Screenshots oder Fehlermeldungen. Die Anwendung liest den Webhook nur aus ihrer Prozessumgebung; sie stellt ihn nicht über die API bereit. Es gibt keinen verpflichtenden externen Dienst. Der Testlauf versendet keine echten Discord-Nachrichten.
 
-[Bedienung und Alarmregeln](docs/usage.md) · [Adapter entwickeln](docs/adapters.md) · [Aktuelle Tests und Prüfgrenzen](docs/review-fixes.md) · [Architektur](docs/superpowers/specs/2026-11-08-mvp-design.md)
+[Bedienung und Alarmregeln](docs/usage.md) · [Adapter entwickeln](docs/adapters.md) · [Aktuelle Tests und Prüfgrenzen](docs/phase2-verification.md) · [Architektur](docs/superpowers/specs/2026-11-08-mvp-design.md)
 
 ## Linux / Raspberry Pi
 
@@ -76,4 +77,4 @@ Keine Windows-spezifische Datenbank oder Browserabhängigkeit. Ein späterer sys
 .\.venv\Scripts\python.exe -m compileall -q dealchecker
 ```
 
-Die normalen Tests arbeiten ausschließlich mit deutlich gekennzeichneten synthetischen Antworten. Live-Prüfungen erfolgen separat und werden im [aktuellen Prüfbericht](docs/review-fixes.md) dokumentiert; der [frühere Prüfstand](docs/verification.md) bleibt erhalten.
+Die normalen Tests arbeiten ausschließlich mit deutlich gekennzeichneten synthetischen Antworten. Live-Prüfungen erfolgen separat und werden im [aktuellen Prüfbericht](docs/phase2-verification.md) dokumentiert; der [frühere Prüfstand](docs/verification.md) bleibt erhalten.

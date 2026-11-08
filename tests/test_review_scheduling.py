@@ -41,7 +41,7 @@ def test_schema_three_upgrade_preserves_existing_watch_due(tmp_path):
         db.conn.execute("PRAGMA user_version=3")
     db.close()
     db = Database(path)
-    assert db.schema_version == 4
+    assert db.schema_version == 6
     assert {source: state["next_due"] for source, state in db.source_schedules(row["id"]).items()} == {
         "a": 1_800_000_123.0, "b": 1_800_000_123.0}
     assert db.get_watch(row["id"])["next_due"] == 1_800_000_123.0
@@ -66,7 +66,7 @@ def test_schema_four_migration_rolls_back_on_interrupted_copy(tmp_path, monkeypa
         assert raw.execute("PRAGMA user_version").fetchone()[0] == 3
         assert raw.execute("SELECT name FROM sqlite_master WHERE name='watch_sources'").fetchone() is None
     reopened = Database(path)
-    assert reopened.schema_version == 4
+    assert reopened.schema_version == 6
     reopened.close()
 
 
@@ -84,7 +84,7 @@ def test_schema_three_partial_failure_does_not_inherit_global_backoff(tmp_path, 
         db.conn.execute("PRAGMA user_version=3")
     db.close()
     db = Database(path)
-    assert db.schema_version == 4
+    assert db.schema_version == 6
     assert db.get_watch(row["id"])["next_due"] <= clock[0]
     assert all(state["failure_count"] == 0 and state["next_due"] <= clock[0]
                for state in db.source_schedules(row["id"]).values())
@@ -98,7 +98,8 @@ async def test_healthy_source_keeps_normal_cadence_while_failure_backs_off_acros
     path = tmp_path / "schedule.db"
     db = Database(path)
     row = db.create_watch(WatchInput(name="Synthetic", kind="discovery", query="Synthetic",
-                                     source_ids=["bad", "good"], priority="critical"))
+                                     source_ids=["bad", "good"], priority="critical",
+                                     interval_seconds=300, black_friday_interval_seconds=300))
     bad, good = Source("bad", clock, failing=True), Source("good", clock)
     engine = Engine(db, {"bad": bad, "good": good})
     await engine.tick()
@@ -138,7 +139,8 @@ async def test_hung_first_source_does_not_prevent_later_source_result(tmp_path, 
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "hung.db")
     row = db.create_watch(WatchInput(name="Synthetic", kind="discovery", query="Synthetic",
-                                     source_ids=["hung", "good"], priority="critical"))
+                                     source_ids=["hung", "good"], priority="critical",
+                                     interval_seconds=300, black_friday_interval_seconds=300))
 
     class Hung(Source):
         async def search(self, watch):
@@ -163,7 +165,8 @@ async def test_skipped_failed_source_does_not_stale_healthy_or_retry_early(tmp_p
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "fresh.db")
     row = db.create_watch(WatchInput(name="Synthetic", kind="discovery", query="Synthetic",
-                                     source_ids=["good", "bad"], priority="critical"))
+                                     source_ids=["good", "bad"], priority="critical",
+                                     interval_seconds=300, black_friday_interval_seconds=300))
     good, bad = Source("good", clock), Source("bad", clock)
     engine = Engine(db, {"good": good, "bad": bad})
     await engine.tick()
@@ -190,7 +193,8 @@ async def test_pause_edit_and_black_friday_keep_source_schedule_coherent(tmp_pat
     monkeypatch.setattr(time, "time", lambda: clock[0])
     db = Database(tmp_path / "settings.db")
     initial = WatchInput(name="Synthetic", kind="discovery", query="Synthetic",
-                         source_ids=["good", "bad"], priority="normal")
+                         source_ids=["good", "bad"], priority="normal",
+                         interval_seconds=1800, black_friday_interval_seconds=900)
     row = db.create_watch(initial)
     good, bad = Source("good", clock), Source("bad", clock, failing=True)
     engine = Engine(db, {"good": good, "bad": bad})
