@@ -27,6 +27,8 @@ _COSTS = {
     _AMAZON_DETAIL: 2,
     _EBAY_SEARCH: 1,
     _EBAY_DETAIL: 2,
+    '/galaxus/v1/search': 2,
+    '/galaxus/v1/product': 2,
 }
 _MAX_SEARCH = 5
 _MAX_CACHE = 48

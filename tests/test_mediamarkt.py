@@ -56,13 +56,16 @@ class FakeHttp:
         self.robots = robots
         self.calls = []
 
-    async def get_text(self, url, *, allowed_hosts, max_body):
+    async def get_text(self, url, *, allowed_hosts, max_body, capture_redirect=False):
         assert allowed_hosts == {urlsplit(url).hostname}
         assert max_body <= 2 * 1024 * 1024
         self.calls.append(url)
         if url.endswith("/robots.txt"):
             return self.robots
-        return self.pages[url]
+        result = self.pages[url]
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def exact(adapter, url, **values):
@@ -192,3 +195,51 @@ async def test_direct_product_respects_live_robots():
     with pytest.raises(ValueError, match="robots.txt sperrt"):
         await adapter.lookup(exact(adapter, url))
     assert http.calls == [MEDIA + "/robots.txt"]
+
+
+@pytest.mark.parametrize('conflict', [
+    {'price': 100}, {'priceCurrency': 'USD'}, {'availability': 'https://schema.org/OutOfStock'},
+    {'seller': {'name': 'Different seller'}}, {'itemCondition': 'https://schema.org/UsedCondition'},
+    {'shippingDetails': {'shippingRate': {'value': 20, 'currency': 'EUR'}}},
+    {'validForMemberTier': {'name': 'Members only'}},
+])
+async def test_selected_variant_cannot_disagree_with_group_offer(conflict):
+    url = MEDIA + PATH
+    selected = selected_variant(url)
+    selected['offers'].update(conflict)
+    html = page(url, product_fields={'@type': 'ProductGroup', 'hasVariant': [selected]})
+    adapter = MediaMarktAdapter(FakeHttp({url: html}))
+    with pytest.raises(ValueError, match='Variante'):
+        await adapter.lookup(exact(adapter, url))
+
+
+@pytest.mark.parametrize('robots_block', [False, True])
+async def test_search_category_redirect_checks_robots_before_second_read(robots_block):
+    from dealchecker.network import PageRedirect
+    url = MEDIA + PATH
+    category = MEDIA + '/de/list/waschmaschine-8kg'
+    search = MEDIA + '/de/search.html?query=Beispiel'
+    listing = markup({'@type': 'ItemList', 'itemListElement': [
+        {'item': {'@type': 'Product', 'name': 'Beispiel Controller', 'url': url}}]})
+    http = FakeHttp({search: PageRedirect(category), category: listing, url: page(url)},
+                    robots='User-agent: *\nDisallow: ' + ('/de/list/' if robots_block else '/intern/') + '\n')
+    adapter = MediaMarktAdapter(http)
+    watch = WatchInput(name='Synthetic', kind='discovery', query='Beispiel')
+    if robots_block:
+        with pytest.raises(ValueError, match='robots.txt sperrt'):
+            await adapter.search(watch)
+        assert category not in http.calls
+    else:
+        [offer] = await adapter.search(watch)
+        assert offer.total_cents == 4260
+        assert http.calls == [MEDIA + '/robots.txt', search, category, url]
+
+
+@pytest.mark.parametrize('target', ['https://evil.example/de/list/foo', MEDIA + '/account/login'])
+async def test_search_redirect_cannot_escape_merchant_category(target):
+    from dealchecker.network import PageRedirect
+    search = MEDIA + '/de/search.html?query=Beispiel'
+    http = FakeHttp({search: PageRedirect(target)})
+    with pytest.raises(ValueError):
+        await MediaMarktAdapter(http).search(WatchInput(name='Synthetic', kind='discovery', query='Beispiel'))
+    assert http.calls == [MEDIA + '/robots.txt', search]

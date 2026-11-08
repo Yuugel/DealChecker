@@ -25,6 +25,7 @@ from .security import LocalOnlyMiddleware
 from .service import Engine
 from .links import resolve_link
 from .notification_settings import NotificationSettings
+from .reef_settings import ReefSettings
 
 
 class SettingsPatch(BaseModel):
@@ -44,6 +45,13 @@ class NotificationInput(BaseModel):
     webhook_url: SecretStr
 
 
+class ReefInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    api_key: SecretStr
+    daily_credit_limit: int = Field(default=20, ge=1, le=500, strict=True)
+    delivery_postcode: str = Field(default='', max_length=5, pattern=r'^([0-9]{5})?$')
+
+
 def create_app(config: Config | None = None, *, adapters=None, start_scheduler=True):
     config = config or Config.from_env()
     secrets = NotificationSettings(config.data_dir)
@@ -55,7 +63,8 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
             client = SafeHttpClient()
             engine = scheduler = None
             try:
-                registry = build_registry(client, config.feeds) if adapters is None else adapters
+                reef = ReefSettings(config.data_dir, config.reef_api_key)
+                registry = build_registry(client, config.feeds, reef_settings=reef) if adapters is None else adapters
                 source = 'environment' if config.discord_webhook else 'local' if secrets.path.exists() else 'none'
                 notification_error = None
                 try:
@@ -70,6 +79,7 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
                 scheduler = Scheduler(engine)
                 app.state.db, app.state.engine, app.state.registry = db, engine, registry
                 app.state.client = client
+                app.state.reef = reef
                 app.state.notification_source = source
                 app.state.notification_error = notification_error
                 if start_scheduler:
@@ -92,8 +102,8 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
 
     @app.exception_handler(RequestValidationError)
     async def safe_validation(request, exc):
-        if request.url.path == '/api/notifications/config':
-            return JSONResponse(status_code=422, content={'detail':'Ungültige Benachrichtigungskonfiguration'})
+        if request.url.path in {'/api/notifications/config', '/api/providers/reef'}:
+            return JSONResponse(status_code=422, content={'detail':'Ungültige Zugangskonfiguration'})
         return await request_validation_exception_handler(request, exc)
 
     @app.get('/')
@@ -123,7 +133,31 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
                 'checks':checks, 'settings':db.get_settings(), 'sources':sources,
                 'notification_configured':bool(app.state.engine.notifier),
                 'notification_configuration_error':app.state.notification_error,
-                'notification_configuration_source':app.state.notification_source}
+                'notification_configuration_source':app.state.notification_source,
+                'reef':app.state.reef.status()}
+
+    @app.put('/api/providers/reef')
+    async def configure_reef(payload: ReefInput):
+        if app.state.reef.source == 'environment':
+            raise HTTPException(409, 'ReefAPI wird über die Prozessumgebung verwaltet.')
+        try:
+            app.state.reef.configure(payload.api_key.get_secret_value().strip(), payload.daily_credit_limit,
+                                    payload.delivery_postcode)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except OSError:
+            raise HTTPException(500, 'ReefAPI-Zugang konnte nicht lokal gespeichert werden.') from None
+        return app.state.reef.status()
+
+    @app.delete('/api/providers/reef')
+    async def remove_reef():
+        if app.state.reef.source == 'environment':
+            raise HTTPException(409, 'ReefAPI wird über die Prozessumgebung verwaltet.')
+        try:
+            app.state.reef.clear()
+        except OSError:
+            raise HTTPException(500, 'ReefAPI-Zugang konnte nicht entfernt werden.') from None
+        return app.state.reef.status()
 
     @app.put('/api/notifications/config')
     async def configure_notification(payload: NotificationInput):
@@ -164,7 +198,8 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
         return {'configured':False, 'source':'none'}
 
     def validate_sources(watch):
-        if any(s not in app.state.registry for s in watch.source_ids):
+        if any(s not in app.state.registry or not getattr(app.state.registry[s], 'configured', True)
+               for s in watch.source_ids):
             raise HTTPException(422, 'Eine gewählte Quelle ist nicht konfiguriert')
         if watch.kind == 'discovery' and any(not getattr(app.state.registry[s], 'supports_search', True) for s in watch.source_ids):
             raise HTTPException(422, 'Eine gewählte Quelle unterstützt nur Produktlinks, keine freie Suche.')

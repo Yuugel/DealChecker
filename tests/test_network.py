@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dealchecker.network import SafeHttpClient, PublicResolver, validate_url
+from dealchecker.network import SafeHttpClient, PublicResolver, validate_url, PageRedirect
 
 
 @pytest.mark.parametrize('url', [
@@ -155,4 +155,42 @@ async def test_larger_body_limit_requires_explicit_bounded_opt_in():
     with pytest.raises(ValueError, match="Limit"):
         await client.get_json('https://modula24.com/feeds/products.de.json', max_body=9 * 1024 * 1024)
     assert len(client._session.calls) == 2
+    await client.close()
+
+
+async def test_api_key_header_is_bounded_pinned_and_never_forwarded():
+    client = SafeHttpClient(min_interval=0)
+    client._session = Session([Response(), Response(302)])
+    key = 'SYNTHETIC_NOT_A_REAL_REEF_KEY'
+    await client.post_json_response('https://api.reefapi.com/amazon/v1/search', {},
+                                    allowed_hosts={'api.reefapi.com'}, headers={'x-api-key': key})
+    assert client._session.calls[0][2]['headers'] == {'x-api-key': key}
+    for headers in [{'Host': key}, {'x-api-key': key + '\r\nInjected: yes'}, {'x-api-key': [key]}]:
+        with pytest.raises(ValueError) as exc:
+            await client.post_json_response('https://api.reefapi.com/amazon/v1/search', {},
+                                           allowed_hosts={'api.reefapi.com'}, headers=headers)
+        assert key not in str(exc.value)
+    with pytest.raises(ValueError):
+        await client.post_json_response('https://api.reefapi.com/amazon/v1/search', {}, headers={'x-api-key': key})
+    with pytest.raises(ValueError, match='302'):
+        await client.post_json_response('https://api.reefapi.com/amazon/v1/search', {},
+                                       allowed_hosts={'api.reefapi.com'}, headers={'x-api-key': key})
+    assert len(client._session.calls) == 2
+    assert all(not call[2]['allow_redirects'] for call in client._session.calls)
+    await client.close()
+
+
+async def test_page_redirect_notice_is_opt_in_same_host_and_never_followed():
+    client = SafeHttpClient(min_interval=0)
+    targets = ['/de/list/washer', 'https://evil.example/list', 'https://127.0.0.1/list',
+               'http://www.mediamarkt.de/list', '//www.mediamarkt.de.evil.example/list']
+    client._session = Session([Response(302, headers={'Location': target}) for target in targets])
+    with pytest.raises(PageRedirect) as exc:
+        await client.get_text('https://www.mediamarkt.de/de/search.html', capture_redirect=True)
+    assert exc.value.target == 'https://www.mediamarkt.de/de/list/washer'
+    for _ in targets[1:]:
+        with pytest.raises(ValueError) as exc:
+            await client.get_text('https://www.mediamarkt.de/de/search.html', capture_redirect=True)
+        assert not isinstance(exc.value, PageRedirect)
+    assert len(client._session.calls) == len(targets)
     await client.close()

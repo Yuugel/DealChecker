@@ -8,6 +8,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 
 from dealchecker.identity import canonical_gtin
 from dealchecker.models import Offer
+from dealchecker.network import PageRedirect, validate_url
 
 from .public_pages import PublicShopAdapter, _gtin, _money, _public_price, _shipping, _text, _type, jsonld_documents
 
@@ -96,7 +97,7 @@ class _MediaSaturnAdapter(PublicShopAdapter):
             raise ValueError("Artikelnummer und Produktlink widersprechen sich")
         return await super().lookup(watch)
 
-    def _variant(self, product: dict, url: str, sku: str, gtin: str) -> str:
+    def _variant(self, product: dict, url: str, sku: str, gtin: str, root_offer: dict) -> str:
         if _type(product.get("@type")) != "ProductGroup":
             return _text(product.get("color"))
         variants = product.get("hasVariant")
@@ -112,6 +113,19 @@ class _MediaSaturnAdapter(PublicShopAdapter):
                 or not isinstance(selected_offer, dict) or not isinstance(variant_url := selected_offer.get("url"), str)
                 or self._product_url(urljoin(self.origin, variant_url)) != url):
             raise ValueError("Variante widerspricht dem Produktlink oder der GTIN")
+        # Some pages repeat only the variant URL; others also repeat its price
+        # and availability. Never prefer a group-level bargain over conflicting
+        # data for the selected SKU.
+        for field in ('priceCurrency', 'availability', 'itemCondition', 'seller', 'shippingDetails'):
+            if field in selected_offer and selected_offer[field] != root_offer.get(field):
+                raise ValueError('Variantenangebot widerspricht dem Hauptangebot')
+        if 'price' in selected_offer and _money(selected_offer['price']) != _price(root_offer):
+            raise ValueError('Variantenpreis widerspricht dem Hauptangebot')
+        if selected_offer.keys() & {'validForMemberTier', 'eligibleCustomerType', 'eligibleQuantity',
+                                    'eligibleTransactionVolume', 'requiresSubscription', 'discountCode', 'coupon'}:
+            raise ValueError('Variantenangebot enthält zusätzliche Preisbedingungen')
+        if 'priceSpecification' in selected_offer:
+            _confirm_price_specification(selected_offer['priceSpecification'], _price(root_offer))
         return " · ".join(value for field in ("color", "size") if (value := _text(variant.get(field))))
 
     def _parse_offer(self, html: str, url: str) -> Offer:
@@ -124,13 +138,13 @@ class _MediaSaturnAdapter(PublicShopAdapter):
         if product.get("sku") != sku or self._product_url(product.get("url")) != url:
             raise ValueError("Produktlink widerspricht der Artikelnummer")
         gtin = _confirmed_gtin(product)
-        variant = self._variant(product, url, sku, gtin)
 
         offers = product.get("offers")
         offers = offers if isinstance(offers, list) else [offers]
         if len(offers) != 1 or not isinstance(offers[0], dict) or _type(offers[0].get("@type")) != "Offer":
             raise ValueError("Produktseite liefert kein eindeutiges Händlerangebot")
         offer = offers[0]
+        variant = self._variant(product, url, sku, gtin, offer)
         if offer.get("priceCurrency") != "EUR" or self._product_url(offer.get("url")) != url:
             raise ValueError("Produktlink oder Währung widerspricht dem Händlerangebot")
         seller = offer.get("seller")
@@ -167,7 +181,15 @@ class MediaMarktAdapter(_MediaSaturnAdapter):
         expires, links = self._searches.get(term, (0, None))
         if monotonic() < expires:
             return links
-        html = await self.pages.get_page(f"{self.origin}/de/search.html?{urlencode({'query': term})}")
+        try:
+            html = await self.pages.get_page(f"{self.origin}/de/search.html?{urlencode({'query': term})}", capture_redirect=True)
+        except PageRedirect as redirect:
+            # The retailer redirects some keywords to its own curated category.
+            # One allowlisted hop, with a fresh robots/path check, no redirect chain.
+            validate_url(redirect.target, set(self.url_hosts))
+            if not urlsplit(redirect.target).path.startswith(('/de/list/', '/de/category/')):
+                raise ValueError('MediaMarkt-Suche verweist nicht auf eine unterstützte Kategorie') from None
+            html = await self.pages.get_page(redirect.target)
         listing = [node.get("itemListElement") for node in jsonld_documents(html)
                    if _type(node.get("@type")) == "ItemList"]
         if len(listing) != 1 or not isinstance(listing[0], list):

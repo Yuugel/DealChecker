@@ -7,10 +7,10 @@ from .network import validate_url
 BUILTIN_HOSTS = {'apple': ('apps.apple.com',), 'modula24': ('modula24.com',),
                  'bestenvergleich': ('bestenvergleich.de',)}
 UNSUPPORTED = {
-    'amazon.de': 'Amazon benötigt einen autorisierten Datenzugang (z. B. Creators API oder kostenpflichtiges Keepa). Automatische Shopabfragen sind nicht aktiviert.',
+    'amazon.de': 'Amazon benötigt den optionalen ReefAPI-Zugang unter Einstellungen.',
     'amzn.eu': 'Amazon-Kurzlinks werden nicht aufgelöst. Ein autorisierter Amazon-Datenzugang fehlt.',
-    'mediamarkt.de': 'MediaMarkt blockiert die geprüften automatischen Zugänge. Die Händler-App bietet eigene Wunschpreisalarme; ein freigegebener Datenzugang fehlt.',
-    'saturn.de': 'Saturn blockiert die geprüften automatischen Zugänge. Die Händler-App bietet eigene Wunschpreisalarme; ein freigegebener Datenzugang fehlt.',
+    'mediamarkt.de': 'MediaMarkt ist in dieser Konfiguration nicht eingerichtet.',
+    'saturn.de': 'Saturn ist in dieser Konfiguration nicht eingerichtet.',
     'otto.de': 'Für automatische OTTO-Datennutzung fehlt die erforderliche Freigabe.',
     'kaufland.de': 'Kauflands Zugriffs- und robots-Regeln konnten wegen einer Zugriffssperre nicht verifiziert werden. Keine automatische Überwachung aktiviert.',
     'galaxus.de': 'Galaxus untersagt systematische automatisierte Abrufe ohne Zustimmung. Alternativ bietet der Händler eigene Preisbenachrichtigungen.',
@@ -28,6 +28,8 @@ async def resolve_link(url: str, registry: dict) -> dict:
         raise ValueError(UNSUPPORTED.get(host.removeprefix('www.'),
                          'Dieser Händlerlink wird noch nicht unterstützt. Wähle eine verfügbare Quelle oder suche nach dem Produktnamen.'))
     adapter = matches[0]
+    if not getattr(adapter, 'configured', True):
+        raise ValueError('Für diesen Händler fehlt der ReefAPI-Zugang. Bitte unter Einstellungen hinterlegen.')
     watch = WatchInput(name='Produktlink', kind='exact', url=url, source_ids=[adapter.id])
     try:
         offers = await asyncio.wait_for(adapter.lookup(watch), timeout=60)
