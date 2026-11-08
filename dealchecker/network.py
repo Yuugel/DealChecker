@@ -6,13 +6,20 @@ import ipaddress
 import json
 import socket
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 
 import aiohttp
 
 
 MAX_BODY = 2 * 1024 * 1024
 MAX_OPT_IN_BODY = 8 * 1024 * 1024
+
+
+class PageRedirect(ValueError):
+    """A validated same-host HTML redirect notice; never followed by transport."""
+    def __init__(self, target):
+        super().__init__('Quelle verweist auf eine andere Seite desselben Händlers')
+        self.target = target
 
 
 def _public(address: str) -> bool:
@@ -86,10 +93,16 @@ class SafeHttpClient:
         return self._session
 
     async def _request(self, method, url, *, payload=None, allowed_hosts=None, max_body=MAX_BODY,
-                       parse_response=True, text_response=False):
+                       parse_response=True, text_response=False, headers=None, capture_redirect=False):
         if isinstance(max_body, bool) or not isinstance(max_body, int) or not 1 <= max_body <= MAX_OPT_IN_BODY:
             raise ValueError('Ungültiges Antwort-Limit')
         host = validate_url(url, allowed_hosts)
+        if headers is not None:
+            if (not allowed_hosts or not isinstance(headers, dict) or set(headers) != {'x-api-key'}
+                    or not isinstance(headers['x-api-key'], str)
+                    or not 16 <= len(headers['x-api-key']) <= 256
+                    or any(not 33 <= ord(c) <= 126 for c in headers['x-api-key'])):
+                raise ValueError('Ungültige API-Authentifizierung')
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
             # Event-loop timers can wake early (notably coarse Windows clocks).
@@ -100,10 +113,17 @@ class SafeHttpClient:
             try:
                 async with self._get_session().request(
                     method, url, json=payload, allow_redirects=False,
+                    **({'headers': headers} if headers is not None else {}),
                     # Some public shop CSP headers exceed aiohttp's 8 KiB default.
                     # Retain a finite 16 KiB header-field cap for HTML/robots only.
                     **({'max_field_size': 16384} if text_response else {}),
                 ) as response:
+                    if capture_redirect and text_response and response.status in {301, 302, 303, 307, 308}:
+                        target = urljoin(url, response.headers.get('Location', ''))
+                        validate_url(target, {host})
+                        if target == url or not response.headers.get('Location'):
+                            raise ValueError('Ungültige Händlerweiterleitung')
+                        raise PageRedirect(target)
                     if response.status == 429:
                         try:
                             retry_after = min(86400, max(60, float(response.headers.get('Retry-After', '60'))))
@@ -144,17 +164,17 @@ class SafeHttpClient:
                             parse_response=False)
 
     async def get_text(self, url: str, *, allowed_hosts: set[str] | None = None,
-                       max_body: int = MAX_BODY):
+                       max_body: int = MAX_BODY, capture_redirect=False):
         """Bounded public HTML/robots; same DNS, HTTPS, rate and redirect guards."""
         return await self._request('GET', url, allowed_hosts=allowed_hosts,
-                                   max_body=max_body, text_response=True)
+                                   max_body=max_body, text_response=True, capture_redirect=capture_redirect)
 
     async def post_json_response(self, url: str, payload: dict, *,
                                  allowed_hosts: set[str] | None = None,
-                                 max_body: int = MAX_BODY):
+                                 max_body: int = MAX_BODY, headers: dict | None = None):
         """Read a documented JSON response to a read-only POST API operation."""
         return await self._request('POST', url, payload=payload, allowed_hosts=allowed_hosts,
-                                   max_body=max_body)
+                                   max_body=max_body, headers=headers)
 
     async def close(self):
         if self._session is not None:

@@ -12,6 +12,7 @@ class Config:
     data_dir: Path = field(default_factory=lambda: Path.home() / '.dealchecker')
     feeds: list[dict] = field(default_factory=list)
     discord_webhook: str = field(default='', repr=False)
+    reef_api_key: str = field(default='', repr=False)
 
     @classmethod
     def from_env(cls):
@@ -24,6 +25,7 @@ class Config:
         return cls(
             data_dir=Path(os.environ.get('DEALCHECKER_DATA_DIR', str(Path.home() / '.dealchecker'))).expanduser().resolve(),
             feeds=feeds, discord_webhook=os.environ.get('DEALCHECKER_DISCORD_WEBHOOK', ''),
+            reef_api_key=os.environ.get('DEALCHECKER_REEF_API_KEY', ''),
         )
 
 

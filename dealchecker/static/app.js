@@ -5,7 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const byId = (id) => document.getElementById(id);
   const API = '/api';
-  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, notificationConfigBusy: false, notificationFeedback: '', search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
+  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, notificationConfigBusy: false, notificationFeedback: '', reefConfigBusy: false, reefFeedback: '', reefDailyDraft: null, reefPostcodeDraft: null, search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
   const dialog = byId('watch-dialog');
   const resolveDialog = byId('resolve-dialog');
 
@@ -400,6 +400,27 @@
         ? 'Eine lokale Adresse ist gespeichert, wird aber aus Sicherheitsgründen nie erneut angezeigt. Eine neue Eingabe ersetzt sie.'
         : 'Webhook-Adresse wird lokal gespeichert. Das Speichern sendet keine Testnachricht und aktiviert Benachrichtigungen nicht.';
     byId('settings-feedback').textContent = state.notificationFeedback;
+    const reef = data.reef || {};
+    const reefSource = reef.source || 'none';
+    const reefManaged = reefSource === 'environment';
+    const reefConfigured = !!reef.configured || reefManaged;
+    const dailyLimit = state.reefDailyDraft == null ? (reef.daily_credit_limit ?? 20) : state.reefDailyDraft;
+    byId('reef-daily-limit').value = String(dailyLimit);
+    byId('reef-delivery-postcode').value = String(state.reefPostcodeDraft == null ? (reef.delivery_postcode || '') : state.reefPostcodeDraft);
+    byId('reef-api-key').disabled = reefManaged || state.reefConfigBusy;
+    byId('reef-daily-limit').disabled = reefManaged || state.reefConfigBusy;
+    byId('reef-delivery-postcode').disabled = reefManaged || state.reefConfigBusy;
+    byId('reef-config-save').disabled = reefManaged || state.reefConfigBusy;
+    byId('reef-config-remove').disabled = reefSource !== 'local' || state.reefConfigBusy;
+    byId('reef-config-help').textContent = reefManaged
+      ? 'Der Schlüssel wird über die Dienstumgebung verwaltet und kann hier nicht geändert werden.'
+      : reefSource === 'local'
+        ? 'Ein lokaler Schlüssel ist gespeichert, wird aber nie wieder angezeigt. Zum Ändern des Limits den Schlüssel erneut eingeben.'
+        : 'Der Schlüssel wird lokal gespeichert und nie wieder angezeigt. Speichern führt keinen Netzwerk-Test aus.';
+    const reserve = Number(reef.reserved_credits_today || 0);
+    const reserveText = reefConfigured ? `Heute reserviert: ${reserve} von ${reef.daily_credit_limit ?? 20} Credits.` : 'Noch kein ReefAPI-Schlüssel eingerichtet.';
+    byId('reef-config-status').textContent = reef.error ? `${reserveText} ${reef.error}` : reefSource === 'environment' ? `Schlüssel aus der Dienstumgebung. ${reserveText}` : reefSource === 'local' ? `Lokaler Schlüssel konfiguriert. ${reserveText}` : reserveText;
+    byId('reef-config-feedback').textContent = state.reefFeedback;
   }
   function render(data) {
     state.data = data;
@@ -756,6 +777,51 @@
       byId('settings-feedback').textContent = state.notificationFeedback;
     }
   }
+  async function saveReefConfiguration(event) {
+    event.preventDefault();
+    if (state.reefConfigBusy) return;
+    const key = byId('reef-api-key').value.trim();
+    const dailyLimit = Number(byId('reef-daily-limit').value);
+    const deliveryPostcode = byId('reef-delivery-postcode').value.trim();
+    if (!key) { state.reefFeedback = 'Bitte den ReefAPI-Schlüssel eingeben.'; byId('reef-config-feedback').textContent = state.reefFeedback; byId('reef-api-key').focus(); return; }
+    if (!Number.isSafeInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 500) { state.reefFeedback = 'Das Tageslimit muss eine ganze Zahl zwischen 1 und 500 Credits sein.'; byId('reef-config-feedback').textContent = state.reefFeedback; byId('reef-daily-limit').focus(); return; }
+    if (deliveryPostcode && !/^\d{5}$/.test(deliveryPostcode)) { state.reefFeedback = 'Die Liefer-PLZ muss leer bleiben oder aus genau fünf Ziffern bestehen.'; byId('reef-config-feedback').textContent = state.reefFeedback; byId('reef-delivery-postcode').focus(); return; }
+    state.reefConfigBusy = true;
+    renderSettings(state.data || {});
+    try {
+      await api('/providers/reef', { method: 'PUT', body: { api_key: key, daily_credit_limit: dailyLimit, delivery_postcode: deliveryPostcode } });
+      byId('reef-api-key').value = '';
+      state.reefDailyDraft = null;
+      state.reefPostcodeDraft = null;
+      state.reefFeedback = 'ReefAPI-Schlüssel und lokales Tageslimit gespeichert. Es wurde kein Testabruf ausgeführt.';
+      await refresh();
+    } catch {
+      state.reefFeedback = 'ReefAPI-Konfiguration konnte nicht gespeichert werden. Prüfe den Schlüssel und versuche es erneut.';
+    } finally {
+      state.reefConfigBusy = false;
+      if (state.data) renderSettings(state.data);
+      byId('reef-config-feedback').textContent = state.reefFeedback;
+    }
+  }
+  async function removeReefConfiguration() {
+    if (state.reefConfigBusy) return;
+    state.reefConfigBusy = true;
+    renderSettings(state.data || {});
+    try {
+      await api('/providers/reef', { method: 'DELETE' });
+      byId('reef-api-key').value = '';
+      state.reefDailyDraft = null;
+      state.reefPostcodeDraft = null;
+      state.reefFeedback = 'Lokale ReefAPI-Konfiguration entfernt.';
+      await refresh();
+    } catch {
+      state.reefFeedback = 'Lokale ReefAPI-Konfiguration konnte nicht entfernt werden.';
+    } finally {
+      state.reefConfigBusy = false;
+      if (state.data) renderSettings(state.data);
+      byId('reef-config-feedback').textContent = state.reefFeedback;
+    }
+  }
   function bind() {
     byId('watch-form').addEventListener('submit', saveWatch);
     byId('quick-name-form').addEventListener('submit', event => { event.preventDefault(); const query = byId('quick-name').value.trim(); if (query) openDiscoverySearch(query); });
@@ -788,6 +854,10 @@
     byId('setting-notifications').addEventListener('change', event => updateSettings('notification_enabled', event.target.checked, event.target.checked ? 'Benachrichtigungen aktiviert.' : 'Benachrichtigungen deaktiviert.'));
     byId('notification-config-form').addEventListener('submit', saveNotificationConfiguration);
     byId('notification-config-remove').addEventListener('click', removeNotificationConfiguration);
+    byId('reef-config-form').addEventListener('submit', saveReefConfiguration);
+    byId('reef-config-remove').addEventListener('click', removeReefConfiguration);
+    byId('reef-daily-limit').addEventListener('input', event => { state.reefDailyDraft = event.target.value; });
+    byId('reef-delivery-postcode').addEventListener('input', event => { state.reefPostcodeDraft = event.target.value; });
     $$('.nav-link').forEach(link => link.addEventListener('click', () => { $$('.nav-link').forEach(item => item.classList.toggle('active', item === link)); }));
   }
   bind();

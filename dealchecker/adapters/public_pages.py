@@ -122,11 +122,12 @@ class PublicPageClient:
         self._locks = {}
         self._last_read = {}
 
-    async def _read(self, url: str, host: str, max_body: int, delay: float) -> str:
+    async def _read(self, url: str, host: str, max_body: int, delay: float, *, capture_redirect=False) -> str:
         while (wait := self._last_read.get(host, -delay) + delay - monotonic()) > 0:
             await asyncio.sleep(wait)
         try:
-            return await self.client.get_text(url, allowed_hosts={host}, max_body=max_body)
+            return await self.client.get_text(url, allowed_hosts={host}, max_body=max_body,
+                                              **({'capture_redirect': True} if capture_redirect else {}))
         finally:
             self._last_read[host] = monotonic()
 
@@ -144,7 +145,7 @@ class PublicPageClient:
             raise ValueError("robots.txt oder Website-Zugriff gesperrt; Quelle pausiert")
         return rules, delay
 
-    async def get_page(self, url: str, *, max_body: int = MAX_BODY) -> str:
+    async def get_page(self, url: str, *, max_body: int = MAX_BODY, capture_redirect=False) -> str:
         host = validate_url(url, self.hosts)
         parsed = urlsplit(url)
         decoded_path = unquote(parsed.path, errors="strict")
@@ -158,7 +159,7 @@ class PublicPageClient:
             if not max(matches, default=(0, True))[1]:
                 raise ValueError("robots.txt sperrt diese Adresse")
             try:
-                return await self._read(url, host, max_body, delay)
+                return await self._read(url, host, max_body, delay, capture_redirect=capture_redirect)
             except ValueError as error:
                 if "HTTP 403" in str(error):
                     self._robots[host] = (monotonic() + _ERROR_TTL, None, delay)
