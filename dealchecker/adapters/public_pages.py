@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections import OrderedDict
 from datetime import date, datetime, timezone
@@ -33,6 +34,8 @@ _PRICE_CONDITIONS = {
 _SHIPPING_FIELDS = {"@type", "shippingDestination", "shippingRate", "deliveryTime"}
 _MAX_DETAILS = 6
 _MAX_CACHE = 96
+
+log = logging.getLogger(__name__)
 
 
 def _escaped_path(value: str) -> str:
@@ -313,6 +316,18 @@ def _gtin(product: dict, page_gtin: str) -> str:
     return next(iter(found.values()), "")
 
 
+class ProductDetailFailure(ValueError):
+    """One search result is missing or invalid; other results may still be usable."""
+
+
+class DiscoveryOffers(list):
+    """Backward-compatible list carrying per-product discovery diagnostics."""
+
+    def __init__(self, offers, skipped_pages: int):
+        super().__init__(offers)
+        self.skipped_pages = skipped_pages
+
+
 class PublicShopAdapter(Adapter):
     """Use the public search form for discovery, then read bounded product pages."""
 
@@ -398,7 +413,19 @@ class PublicShopAdapter(Adapter):
     async def _offer_at(self, url: str) -> Offer:
         expires, offer = self._offers.get(url, (0, None))
         if monotonic() >= expires:
-            return self._store(self._offers, url, self._parse_offer(await self.pages.get_page(url), url))
+            try:
+                page = await self.pages.get_page(url)
+            except ValueError as exc:
+                # Gone listings are product-specific. Never suppress 403/429,
+                # robots policy failures, timeouts or other host-wide errors.
+                if str(exc).startswith(("Quelle meldet HTTP 404;", "Quelle meldet HTTP 410;")):
+                    raise ProductDetailFailure("Produktseite nicht mehr verfügbar") from exc
+                raise
+            try:
+                offer = self._parse_offer(page, url)
+            except ValueError as exc:
+                raise ProductDetailFailure(str(exc)) from exc
+            return self._store(self._offers, url, offer)
         return offer
 
     async def _links(self, term: str) -> list[tuple[str, str]]:
@@ -432,10 +459,25 @@ class PublicShopAdapter(Adapter):
         if exact and len(candidates) > _MAX_DETAILS:
             raise ValueError("Zu viele mögliche Treffer; bitte direkten Produktlink verwenden")
         offers = []
+        skipped = []
         for url in list(candidates)[:_MAX_DETAILS]:
-            offer = await self._offer_at(url)
+            try:
+                offer = await self._offer_at(url)
+            except ProductDetailFailure as exc:
+                if exact:
+                    raise  # Exact product monitoring must remain strict.
+                skipped.append((url, str(exc)))
+                continue
             if identity or any(_matches_term(offer, term) for term in terms):
                 offers.append(offer)
+        if skipped:
+            for url, detail in skipped:
+                log.warning("%s: Suchtreffer %s übersprungen: %s",
+                            self.id, urlsplit(url).path, detail)
+            if not offers:
+                raise ValueError(f"{len(skipped)} defekte oder verschwundene Produktseiten; "
+                                 "kein gültiger Treffer gefunden")
+            return DiscoveryOffers(offers, skipped_pages=len(skipped))
         return offers
 
     async def search(self, watch) -> list[Offer]:
