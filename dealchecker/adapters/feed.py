@@ -128,17 +128,23 @@ class FeedAdapter(Adapter):
         else:
             title = watch.query or watch.name
             matches = [offer for offer in offers if offer.name.casefold() == title.casefold()]
-            if len({(offer.product_id, offer.variant) for offer in matches}) > 1:
-                raise ValueError("Feed-Titel ist mehrdeutig; bitte Produkt-ID auswählen")
             if not matches:
                 raise ValueError("Feed-Titel nicht gefunden; bitte Produkt-ID auswählen")
+        if watch.url:
+            safe_https_url(watch.url)
+            if matches and not any(offer.url == watch.url for offer in matches):
+                raise ValueError("Feed-Produktidentität und URL widersprechen sich")
+            matches = [offer for offer in matches if offer.url == watch.url]
         if watch.gtin and matches and any(not offer.gtin for offer in matches):
             raise ValueError("Feed kann GTIN für diesen Treffer nicht verifizieren")
         if watch.model and matches and any(not offer.model for offer in matches):
             raise ValueError("Feed kann Modell für diesen Treffer nicht verifizieren")
         if watch.variant and matches and any(not offer.variant for offer in matches):
             raise ValueError("Feed kann Variante für diesen Treffer nicht verifizieren")
-        return [offer for offer in matches if
+        matches = [offer for offer in matches if
                 (not watch.gtin or offer.gtin == watch.gtin) and
                 (not watch.model or offer.model.casefold() == watch.model.casefold()) and
                 (not watch.variant or offer.variant.casefold() == watch.variant.casefold())]
+        if not any((watch.product_id, watch.gtin, watch.model, watch.url)) and len({(o.product_id, o.variant) for o in matches}) > 1:
+            raise ValueError("Feed-Titel ist mehrdeutig; bitte Produkt-ID auswählen")
+        return matches

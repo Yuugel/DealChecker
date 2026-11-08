@@ -177,6 +177,16 @@ async def test_exact_feed_title_preserves_multiple_merchants_but_rejects_variant
 
 
 @pytest.mark.asyncio
+async def test_feed_exact_requested_variant_disambiguates_and_conflicting_url_rejected():
+    config = {"id":"shop", "name":"Shop", "url":"https://feed.example/catalog.json"}
+    adapter = FeedAdapter(FakeClient([{"offers":[feed_item(), feed_item(product_id="sku-2", variant="Rot")]}]), config)
+    watch = WatchInput(name="Controller", query="Controller Blau", variant="Blau", source_ids=["shop"])
+    assert [o.product_id for o in await adapter.lookup(watch)] == ["sku-1"]
+    with pytest.raises(ValueError, match="widersprechen"):
+        await adapter.lookup(WatchInput(name="Controller", product_id="sku-1", url="https://other.example/wrong", source_ids=["shop"]))
+
+
+@pytest.mark.asyncio
 async def test_feed_rejects_malformed_rows_and_unsafe_links():
     for bad in (feed_item(price_cents="29.99"), feed_item(url="http://localhost/private"), feed_item(availability=None)):
         client = FakeClient([{"offers": [bad]}])
