@@ -91,6 +91,21 @@ async def test_post_204_does_not_require_json_and_errors_do_not_leak_url():
     await client.close()
 
 
+async def test_post_json_response_parses_bounded_json_without_changing_notification_post():
+    client = SafeHttpClient(min_interval=0)
+    client._session = Session([Response(body=b'{"currency":"EUR"}'), Response(204, body=b''),
+                               Response(body=b'invalid')])
+    result = await client.post_json_response('https://modula24.com/api/checkout/shipping',
+                                             {'country': 'DE'}, allowed_hosts={'modula24.com'})
+    assert result == {'currency': 'EUR'}
+    await client.post_json('https://discord.com/api/webhooks/123/SECRET', {'content': 'test'})
+    with pytest.raises(ValueError, match='JSON'):
+        await client.post_json_response('https://modula24.com/api/checkout/shipping',
+                                        {}, allowed_hosts={'modula24.com'})
+    assert all(not call[2]['allow_redirects'] for call in client._session.calls)
+    await client.close()
+
+
 async def test_larger_body_limit_requires_explicit_bounded_opt_in():
     body = json.dumps({"padding": "x" * (2 * 1024 * 1024)}).encode()
     client = SafeHttpClient(min_interval=0)
