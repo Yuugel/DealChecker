@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .models import Offer, WatchInput
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 FEED_FRESH_SECONDS = 600
 INTERVALS = {"critical": 300, "high": 900, "normal": 1800, "low": 3600}
 
@@ -27,7 +27,11 @@ class Database:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
-        self._migrate()
+        try:
+            self._migrate()
+        except Exception:
+            self.conn.close()
+            raise
 
     def _migrate(self):
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
@@ -87,6 +91,32 @@ class Database:
                 PRAGMA user_version=3;
                 COMMIT;
                 """)
+            version = 3
+        if version < 4:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute("""CREATE TABLE watch_sources (
+                    watch_id INTEGER NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+                    source_id TEXT NOT NULL, next_due REAL NOT NULL,
+                    failure_count INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+                    last_checked REAL, PRIMARY KEY(watch_id, source_id))""")
+                for row in self.conn.execute("SELECT * FROM watches"):
+                    # The v3 failure belongs to an unknown source. Recheck all
+                    # sources promptly instead of assigning its backoff to each.
+                    failed = row["failure_count"] > 0
+                    due = min(row["next_due"], time.time()) if failed else row["next_due"]
+                    for source in json.loads(row["data"])["source_ids"]:
+                        self.conn.execute("""INSERT INTO watch_sources
+                            (watch_id,source_id,next_due,failure_count,last_error,last_checked)
+                            VALUES(?,?,?,?,?,?)""", (row["id"], source, due, 0, None,
+                                               None if failed else row["last_checked"]))
+                    if failed:
+                        self.conn.execute("UPDATE watches SET next_due=? WHERE id=?", (due, row["id"]))
+                self.conn.execute("PRAGMA user_version=4")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     @property
     def schema_version(self):
@@ -104,12 +134,33 @@ class Database:
         with self.conn:
             cur = self.conn.execute("INSERT INTO watches(data,next_due) VALUES(?,?)",
                                     (data.model_dump_json(), now))
+            self.conn.executemany("INSERT INTO watch_sources(watch_id,source_id,next_due) VALUES(?,?,?)",
+                                  [(cur.lastrowid, source, now) for source in data.source_ids])
         return self.get_watch(cur.lastrowid)
 
     def update_watch(self, id: int, data: WatchInput) -> dict | None:
+        now = time.time()
         with self.conn:
             cur = self.conn.execute("UPDATE watches SET data=?,next_due=? WHERE id=?",
-                                    (data.model_dump_json(), time.time(), id))
+                                    (data.model_dump_json(), now, id))
+            if cur.rowcount:
+                old = self.source_schedules(id)
+                self.conn.execute("DELETE FROM watch_sources WHERE watch_id=?", (id,))
+                for source in data.source_ids:
+                    state = old.get(source)
+                    if state is None:
+                        values = (id, source, now, 0, None, None)
+                    else:
+                        due = state["next_due"] if state["failure_count"] else now
+                        values = (id, source, due, state["failure_count"], state["last_error"], state["last_checked"])
+                    self.conn.execute("""INSERT INTO watch_sources
+                        (watch_id,source_id,next_due,failure_count,last_error,last_checked)
+                        VALUES(?,?,?,?,?,?)""", values)
+                current = self.source_schedules(id)
+                errors = [f"{source}: {state['last_error']}" for source, state in current.items() if state["last_error"]]
+                self.conn.execute("UPDATE watches SET next_due=?,failure_count=?,last_error=? WHERE id=?",
+                                  (min(s["next_due"] for s in current.values()),
+                                   max(s["failure_count"] for s in current.values()), "; ".join(errors) or None, id))
         return self.get_watch(id) if cur.rowcount else None
 
     def delete_watch(self, id: int) -> bool:
@@ -126,6 +177,11 @@ class Database:
     def force_due(self, id: int, when: float):
         with self.conn:
             self.conn.execute("UPDATE watches SET next_due=? WHERE id=?", (when, id))
+            self.conn.execute("UPDATE watch_sources SET next_due=? WHERE watch_id=?", (when, id))
+
+    def source_schedules(self, id: int) -> dict[str, dict]:
+        return {r["source_id"]: dict(r) for r in self.conn.execute(
+            "SELECT * FROM watch_sources WHERE watch_id=?", (id,))}
 
     def due_watches(self, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
@@ -157,11 +213,15 @@ class Database:
                 if "black_friday_until" in data and data["black_friday_until"] > time.time():
                     settings = self.get_settings()
                     for row in self.list_watches():
-                        if row["last_checked"] is None:
-                            continue
-                        delay = interval(row, settings) * min(2 ** row["failure_count"], 16)
-                        candidate = row["last_checked"] + delay
-                        self.conn.execute("UPDATE watches SET next_due=MIN(next_due,?) WHERE id=?", (candidate, row["id"]))
+                        for source in self.source_schedules(row["id"]).values():
+                            if source["last_checked"] is None:
+                                continue
+                            delay = interval(row, settings) * min(2 ** source["failure_count"], 16)
+                            candidate = source["last_checked"] + delay
+                            self.conn.execute("UPDATE watch_sources SET next_due=MIN(next_due,?) WHERE watch_id=? AND source_id=?",
+                                              (candidate, row["id"], source["source_id"]))
+                        self.conn.execute("UPDATE watches SET next_due=(SELECT MIN(next_due) FROM watch_sources WHERE watch_id=?) WHERE id=?",
+                                          (row["id"], row["id"]))
         return self.get_settings()
 
     def list_offers(self, watch_id: int | None = None) -> list[dict]:
@@ -173,11 +233,15 @@ class Database:
         sql += " ORDER BY o.observed_at DESC,o.id DESC"
         now = time.time()
         result = []
+        schedules = {}
         for r in self.conn.execute(sql, args):
             data = json.loads(r["data"])
             watch = json.loads(r["watch_data"])
-            stale = (r["seen_at"] < r["last_checked"]
-                     or now >= r["next_due"] or data.get("quality") == "feed_stale"
+            if r["watch_id"] not in schedules:
+                schedules[r["watch_id"]] = self.source_schedules(r["watch_id"])
+            source = schedules[r["watch_id"]].get(data["source"])
+            stale = (source is None or (source["last_checked"] is not None and r["seen_at"] < source["last_checked"])
+                     or (source is not None and now >= source["next_due"]) or data.get("quality") == "feed_stale"
                      or (data.get("provenance") == "feed" and now - r["observed_at"] > FEED_FRESH_SECONDS)
                      or now - r["observed_at"] > 2 * interval(watch, self.get_settings()))
             result.append({"id": r["id"], "watch_id": r["watch_id"], **data,
@@ -225,13 +289,14 @@ class Database:
         return history, alert[0] if alert else None, bool(alert)
 
     def record_check(self, watch_id: int, observations: list[tuple[Offer, str, int | None, int | None, str | None]],
-                     status: str, error: str | None, checked_at: float):
+                     status: str, error: str | None, checked_at: float,
+                     source_outcomes: dict[str, tuple[str | None, int]] | None = None):
         """Persist observations and event/outbox decisions as one unit."""
         row = self.get_watch(watch_id)
         if row is None:
             return
-        failure = row["failure_count"] + 1 if status == "error" else 0
-        delay = interval(row, self.get_settings()) * (min(2 ** failure, 16) if failure else 1)
+        if source_outcomes is None:
+            source_outcomes = {source: (error if status == "error" else None, 0) for source in row["source_ids"]}
         with self.conn:
             for item, evaluation, comparison, savings, reason in observations:
                 data = item.model_dump()
@@ -260,8 +325,27 @@ class Database:
                         self.conn.execute("INSERT INTO outbox(event_id,next_due) VALUES(?,?)", (cur.lastrowid, checked_at))
             self.conn.execute("INSERT INTO checks(watch_id,checked_at,status,offers,error) VALUES(?,?,?,?,?)",
                               (watch_id, checked_at, status, len(observations), error))
+            for source, (source_error, minimum) in source_outcomes.items():
+                previous = self.conn.execute("SELECT failure_count FROM watch_sources WHERE watch_id=? AND source_id=?",
+                                             (watch_id, source)).fetchone()
+                if previous is None:
+                    continue
+                failure = previous[0] + 1 if source_error else 0
+                delay = max(interval(row, self.get_settings()), minimum) * (min(2 ** failure, 16) if failure else 1)
+                self.conn.execute("""UPDATE watch_sources SET next_due=?,failure_count=?,last_error=?,last_checked=?
+                    WHERE watch_id=? AND source_id=?""", (checked_at + delay, failure, source_error, checked_at, watch_id, source))
+                self.conn.execute("""INSERT INTO source_status(source_id,last_checked,last_success,last_error)
+                    VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET
+                    last_checked=excluded.last_checked,
+                    last_success=CASE WHEN excluded.last_error IS NULL THEN excluded.last_checked ELSE source_status.last_success END,
+                    last_error=excluded.last_error""",
+                    (source, checked_at, checked_at if source_error is None else None, source_error))
+            current = self.source_schedules(watch_id)
+            errors = [f"{source}: {state['last_error']}" for source, state in current.items() if state["last_error"]]
             self.conn.execute("UPDATE watches SET next_due=?,failure_count=?,last_error=?,last_checked=? WHERE id=?",
-                              (checked_at + delay, failure, error, checked_at, watch_id))
+                              (min(s["next_due"] for s in current.values()),
+                               max(s["failure_count"] for s in current.values()), error or "; ".join(errors) or None,
+                               checked_at, watch_id))
 
     def due_outbox(self, now: float | None = None, limit: int = 20) -> list[dict]:
         now = time.time() if now is None else now

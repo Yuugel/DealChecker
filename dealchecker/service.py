@@ -6,6 +6,8 @@ import time
 from .db import Database, FEED_FRESH_SECONDS, interval
 from .models import Offer, WatchInput
 
+SOURCE_CHECK_TIMEOUT = 60
+
 
 def _contains(text: str, term: str) -> bool:
     return term.casefold() in text.casefold()
@@ -70,9 +72,7 @@ def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: 
         reason = "Interessanter Preisrückgang"
     evaluation = reason or ("Unzureichende Daten" if not history else "Kein relevantes Angebot")
     if reason and last_alert is not None:
-        last = history[-1] if history else None
-        prev_eligible = last and last["total_cents"] is not None and last["availability"] == "in_stock" and now - last["checked_at"] <= 2 * interval_seconds
-        if not prev_eligible or offer.total_cents >= last_alert or offer.total_cents >= last["total_cents"]:
+        if offer.total_cents >= last_alert or (previous and offer.total_cents >= previous[-1]):
             reason = None
     return evaluation, comparison, savings, reason
 
@@ -91,7 +91,7 @@ class Engine:
     def is_running(self, id: int) -> bool:
         return id in self._running
 
-    async def check_watch(self, id: int) -> dict:
+    async def check_watch(self, id: int, *, scheduled: bool = False) -> dict:
         if self._closed:
             return {"status": "error", "offers": 0, "error": "engine closed"}
         watch_row = self.db.get_watch(id)
@@ -107,57 +107,71 @@ class Engine:
             self._tasks.add(task)
         try:
             async with self._sem:
-                return await self._check(id, watch_row)
+                return await self._check(id, watch_row, scheduled=scheduled)
         finally:
             self._running.discard(id)
             if task is not None:
                 self._tasks.discard(task)
 
-    async def _check(self, id: int, row: dict) -> dict:
+    async def _check(self, id: int, row: dict, *, scheduled: bool) -> dict:
         watch = WatchInput.model_validate({k: v for k, v in row.items() if k in WatchInput.model_fields})
         results: list[Offer] = []
         errors = []
-        active_source = None
+        schedules = self.db.source_schedules(id)
+        started = time.time()
+        selected = [source for source in watch.source_ids
+                    if schedules[source]["next_due"] <= started
+                    or (not scheduled and schedules[source]["failure_count"] == 0)]
+        if not selected:
+            return {"status": "error" if row["last_error"] else "ok", "offers": 0,
+                    "error": row["last_error"]}
+        outcomes: dict[str, tuple[str | None, int]] = {}
+        # WatchInput bounds this to 20; all sources can enter before the 60s deadline.
+        source_sem = asyncio.Semaphore(20)
 
-        async def fetch():
-            nonlocal active_source
-            for source in watch.source_ids:
-                active_source = source
-                adapter = self.adapters.get(source)
-                if adapter is None:
-                    message = "source unavailable"
-                    errors.append(f"{source}: {message}")
-                    self.db.record_source_status(source, message, time.time())
-                    active_source = None
-                    continue
-                try:
+        async def fetch(source):
+            adapter = self.adapters.get(source)
+            minimum = getattr(adapter, "min_interval_seconds", 0) if adapter else 0
+            if adapter is None:
+                return source, [], "source unavailable", minimum
+            try:
+                async with source_sem:
                     method = adapter.search if watch.kind == "discovery" else adapter.lookup
-                    found = await method(watch)
-                    if not isinstance(found, list):
-                        raise ValueError("invalid source result")
-                    for offer in found:
-                        if not isinstance(offer, Offer):
-                            raise ValueError("invalid offer")
-                        if offer.source != source:
-                            raise ValueError("source identity mismatch")
-                        results.append(offer)
-                    self.db.record_source_status(source, None, time.time())
-                except (ValueError, RuntimeError, OSError) as exc:
-                    message = str(exc)[:200]
-                    errors.append(f"{source}: {message}")
-                    self.db.record_source_status(source, message, time.time())
-                except Exception as exc:
-                    message = f"{type(exc).__name__} failure"
-                    errors.append(f"{source}: {message}")
-                    self.db.record_source_status(source, message, time.time())
-                active_source = None
+                    found = await asyncio.wait_for(method(watch), timeout=SOURCE_CHECK_TIMEOUT)
+                if not isinstance(found, list):
+                    raise ValueError("invalid source result")
+                for item in found:
+                    if not isinstance(item, Offer):
+                        raise ValueError("invalid offer")
+                    if item.source != source:
+                        raise ValueError("source identity mismatch")
+                return source, found, None, minimum
+            except asyncio.TimeoutError:
+                return source, [], "check deadline exceeded", minimum
+            except (ValueError, RuntimeError, OSError) as exc:
+                return source, [], str(exc)[:200], minimum
+            except Exception as exc:
+                return source, [], f"{type(exc).__name__} failure", minimum
 
+        tasks = {source: asyncio.create_task(fetch(source)) for source in selected}
         try:
-            await asyncio.wait_for(fetch(), timeout=60)
-        except asyncio.TimeoutError:
-            errors.append("check deadline exceeded")
-            if active_source is not None:
-                self.db.record_source_status(active_source, "check deadline exceeded", time.time())
+            done, pending = await asyncio.wait(tasks.values(), timeout=SOURCE_CHECK_TIMEOUT)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        except asyncio.CancelledError:
+            for task in tasks.values():
+                task.cancel()
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
+            raise
+        fetched = [task.result() if task in done else (source, [], "check deadline exceeded", 0)
+                   for source, task in tasks.items()]
+        for source, found, source_error, minimum in fetched:
+            results.extend(found)
+            outcomes[source] = (source_error, minimum)
+            if source_error:
+                errors.append(f"{source}: {source_error}")
         latest = self.db.get_watch(id)
         if latest is None:
             return {"status": "missing", "offers": 0, "error": None}
@@ -173,7 +187,9 @@ class Engine:
                     if item.key not in unique or item.checked_at >= unique[item.key].checked_at:
                         unique[item.key] = item
             except ValueError as exc:
-                errors.append(f"{item.source}: {str(exc)[:200]}")
+                message = str(exc)[:200]
+                errors.append(f"{item.source}: {message}")
+                outcomes[item.source] = (message, outcomes[item.source][1])
         identities = {(item.source, item.product_id, item.variant) for item in unique.values()}
         if watch.kind == "exact" and watch.query and not any((watch.product_id, watch.url, watch.gtin, watch.model, watch.variant)) and len(identities) > 1:
             errors.append("exact title is ambiguous")
@@ -184,9 +200,12 @@ class Engine:
         for item in unique.values():
             history, last_alert, _ = self.db.prior(id, item.key)
             observations.append((item, *_evaluate(watch, item, history, last_alert, interval(row, self.db.get_settings()), now)))
+        for source in watch.source_ids:
+            if source not in outcomes and schedules[source]["last_error"]:
+                errors.append(f"{source}: {schedules[source]['last_error']}")
         status = "error" if errors else "ok"
         error = "; ".join(errors) if errors else None
-        self.db.record_check(id, observations, status, error, now)
+        self.db.record_check(id, observations, status, error, now, source_outcomes=outcomes)
         await self.flush_outbox()
         return {"status": status, "offers": len(observations), "error": error}
 
@@ -207,7 +226,7 @@ class Engine:
             return
         if not self.db.get_settings()["paused"]:
             due = [w for w in self.db.due_watches() if w["id"] not in self._running][:4]
-            await asyncio.gather(*(self.check_watch(w["id"]) for w in due))
+            await asyncio.gather(*(self.check_watch(w["id"], scheduled=True) for w in due))
         await self.flush_outbox()
 
     async def close(self) -> None:

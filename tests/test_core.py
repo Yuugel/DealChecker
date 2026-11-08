@@ -266,6 +266,7 @@ async def test_exact_title_ambiguity_is_visible(tmp_path):
     engine = Engine(db, {"synthetic": Adapter([offer(), second])})
     result = await engine.check_watch(row["id"])
     assert result["status"] == "error" and "ambiguous" in result["error"]
+    assert "ambiguous" in db.get_watch(row["id"])["last_error"]
     assert db.list_offers() == []
     await engine.close()
 
@@ -497,6 +498,7 @@ def test_version_one_migration_deduplicates_old_replays(tmp_path):
     with db.conn:
         db.conn.execute("DROP INDEX IF EXISTS observations_unique_time")
         db.conn.execute("DROP TABLE IF EXISTS source_status")
+        db.conn.execute("DROP TABLE IF EXISTS watch_sources")
         db.conn.execute("ALTER TABLE offers DROP COLUMN seen_at")
         db.conn.execute("PRAGMA user_version=1")
         db.conn.execute("INSERT INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) "
@@ -504,7 +506,7 @@ def test_version_one_migration_deduplicates_old_replays(tmp_path):
                         "FROM observations WHERE offer_id=?", (offer_id,))
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 3
+    assert reopened.schema_version == 4
     assert len(reopened.history(offer_id)) == 1
     reopened.close()
 
@@ -537,7 +539,7 @@ async def test_source_status_tracks_each_source_and_survives_restart(tmp_path):
     await engine.close()
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 3
+    assert reopened.schema_version == 4
     assert reopened.source_statuses() == statuses
     reopened.close()
 
@@ -680,3 +682,79 @@ def test_event_records_source_provenance(tmp_path):
     assert event["source"] == "synthetic"
     assert event["provenance"] == "feed"
     assert event["quality"] == "feed_reported"
+
+
+@pytest.mark.asyncio
+async def test_new_lower_price_alerts_after_old_history_and_restart(tmp_path, monkeypatch):
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    path = tmp_path / "aged.db"
+    db = Database(path)
+    row = db.create_watch(watch(target_cents=3000))
+    adapter = Adapter([offer(3000, 0, checked_at=clock[0])])
+    engine = Engine(db, {"synthetic": adapter})
+    assert (await engine.check_watch(row["id"]))["status"] == "ok"
+    await engine.close()
+    db.close()
+
+    clock[0] += 4 * 3600
+    db = Database(path)
+    adapter.results = [offer(2000, 0, checked_at=clock[0])]
+    engine = Engine(db, {"synthetic": adapter})
+    await engine.check_watch(row["id"])
+    assert [event["total_cents"] for event in db.list_events()] == [2000, 3000]
+    adapter.results = [offer(2000, 0, checked_at=clock[0] + 1)]
+    await engine.check_watch(row["id"])
+    adapter.results = [offer(2500, 0, checked_at=clock[0] + 2)]
+    await engine.check_watch(row["id"])
+    adapter.results = [offer(1500, 0, checked_at=clock[0] - 10000)]
+    await engine.check_watch(row["id"])
+    assert [event["total_cents"] for event in db.list_events()] == [2000, 3000]
+    await engine.close()
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_latest_eligible_price_controls_drop_after_prior_alert(tmp_path, monkeypatch):
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    db = Database(tmp_path / "latest.db")
+    row = db.create_watch(watch(target_cents=3000))
+    db.record_check(row["id"], [(offer(2000, 0, checked_at=clock[0]), "Kein relevantes Angebot", None, None, None)],
+                    "ok", None, clock[0])
+    clock[0] += 1
+    adapter = Adapter([offer(3000, 0, checked_at=clock[0])])
+    engine = Engine(db, {"synthetic": adapter})
+    await engine.check_watch(row["id"])
+    clock[0] += 1
+    adapter.results = [offer(3500, 0, checked_at=clock[0])]
+    await engine.check_watch(row["id"])
+    clock[0] += 1
+    adapter.results = [offer(2500, 0, checked_at=clock[0])]
+    await engine.check_watch(row["id"])
+    assert [event["total_cents"] for event in db.list_events()] == [2500, 3000]
+    await engine.close()
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_and_out_of_stock_history_do_not_veto_later_fresh_drop(tmp_path, monkeypatch):
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    db = Database(tmp_path / "intervening.db")
+    row = db.create_watch(watch(target_cents=3000))
+    adapter = Adapter([offer(3000, 0, checked_at=clock[0])])
+    engine = Engine(db, {"synthetic": adapter})
+    await engine.check_watch(row["id"])
+    clock[0] += 1
+    adapter.results = [offer(1000, None, checked_at=clock[0])]
+    await engine.check_watch(row["id"])
+    clock[0] += 1
+    adapter.results = [offer(1000, 0, checked_at=clock[0]).model_copy(update={"availability": "out_of_stock"})]
+    await engine.check_watch(row["id"])
+    clock[0] += 1
+    adapter.results = [offer(2000, 0, checked_at=clock[0])]
+    await engine.check_watch(row["id"])
+    assert [event["total_cents"] for event in db.list_events()] == [2000, 3000]
+    await engine.close()
+    db.close()
