@@ -437,13 +437,15 @@
   }
   function buildSourceOptions(sources, selected = ['apple']) {
     const root = byId('source-options'); root.replaceChildren();
+    const discovery = $('input[name="watch-kind"][value="discovery"]')?.checked;
+    if (discovery) selected = selected.filter(id => sources.find(source => source.id === id)?.supports_search !== false);
     const available = [...sources];
     for (const id of selected) {
       if (!available.some(source => source.id === id)) available.push({ id, name: `${id} · nicht im Quellenkatalog`, configured: false, description: '' });
     }
     for (const source of available) {
       const label = el('label', 'source-check');
-      const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = source.configured === false && !selected.includes(source.id);
+      const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = (source.configured === false && !selected.includes(source.id)) || (discovery && source.supports_search === false);
       input.addEventListener('change', () => renderSourceIntervalOptions());
       label.append(input, document.createTextNode(`${source.name || source.id}${source.supports_search === false ? ' · nur Link' : ''}`)); root.append(label);
     }
@@ -511,7 +513,7 @@
     if (offer) {
       const sourceId = String(offer.source || offer.source_id || '');
       byId('watch-dialog-title').textContent = 'Angebot exakt beobachten';
-      byId('watch-name').value = offer.name || '';
+      byId('watch-name').value = String(offer.name || '').slice(0, 200);
       const exact = $('input[name="watch-kind"][value="exact"]'); if (exact) exact.checked = true;
       byId('watch-query').value = '';
       buildSourceOptions(state.data?.sources || [], [sourceId]);
@@ -568,7 +570,7 @@
   }
   function openDiscoverySearch(query) {
     openWatchEditor();
-    byId('watch-name').value = query;
+    byId('watch-name').value = query.slice(0, 200);
     byId('watch-query').value = query;
     const discovery = $('input[name="watch-kind"][value="discovery"]');
     if (discovery) discovery.checked = true;
