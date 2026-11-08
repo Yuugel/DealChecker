@@ -19,7 +19,7 @@ Die Anwendung betrachtet ausschließlich die eigene, gespeicherte Beobachtungshi
 
 Vergleichspreise sind **beobachtete historische Preise**, kein repräsentativer Marktpreis. Der angezeigte Vergleich und die Ersparnis müssen nicht dem Bewertungsgrenzwert entsprechen: Sie beziehen sich auf den vorher beobachteten Tiefstpreis. Erst längere Beobachtungszeiträume liefern eine brauchbare Grundlage. Veraltete Daten, unbekannte Versandkosten oder unbekannte/nicht verfügbare Ware erzeugen keinen Kaufpreisalarm.
 
-Nach einem Alarm wird dasselbe Angebot nur bei einer weiteren relevanten Verbesserung unter dem zuletzt gemeldeten Preis und der vorherigen geeigneten Beobachtung erneut gemeldet. Unveränderte Preise, Preiserhöhungen und bloße Wiederkehr zum alten Preis erzeugen keine Doppelmeldungen. Ereignisse bleiben lokal verfügbar, auch wenn Discord nicht eingerichtet ist.
+Nach einem Alarm wird dasselbe Angebot nur bei einer weiteren relevanten Verbesserung unter dem zuletzt gemeldeten Preis und der vorherigen geeigneten Beobachtung erneut gemeldet. Diese historische Vergleichsbeobachtung darf älter sein, etwa nach mehrstündiger Rechnerpause; die neue Preisbeobachtung muss weiterhin frisch sein. Unveränderte Preise, Preiserhöhungen und bloße Wiederkehr zum alten Preis erzeugen keine Doppelmeldungen. Ereignisse bleiben lokal verfügbar, auch wenn Discord nicht eingerichtet ist.
 
 ## Zeitplanung
 
@@ -31,6 +31,8 @@ Nach einem Alarm wird dasselbe Angebot nur bei einer weiteren relevanten Verbess
 | Niedrig | 60 Minuten | 30 Minuten |
 
 Eigene Intervalle zwischen 5 Minuten und 24 Stunden sind möglich. Black Friday endet automatisch nach höchstens 24 Stunden. Cache, Zeitlimits, Anbieterlimits, parallele Aufträge und Fehler-Backoff können die tatsächliche Prüfung verzögern. Die manuelle Prüfung umgeht diese Schutzmaßnahmen nicht.
+
+Fehler-Backoff gilt getrennt je Quelle und Überwachung. Fällt eine Quelle dauerhaft aus, verlängert sich nur ihre Wiederholungsfrist (bis zum 16-fachen Intervall); funktionierende Quellen behalten ihren normalen Takt. Die nächste Prüfung des Auftrags ist die früheste Quellenfälligkeit. Auch wenn eine fehlerhafte Quelle gerade auf ihren Wiederholungsversuch wartet, bleibt ihr Fehler sichtbar. Angebote einer noch nicht fälligen Quelle werden durch die Prüfung einer anderen Quelle nicht automatisch ungültig.
 
 „Pause“ verhindert neue Prüfungen. Eine bereits laufende Anfrage kann noch beendet werden; Ergebnisse eines inzwischen geänderten/pausierten Auftrags werden nicht als neue gültige Prüfung übernommen. Ein Neustart behält gespeicherte Fälligkeiten bei. Nur ein Prozess pro Datenverzeichnis darf laufen.
 

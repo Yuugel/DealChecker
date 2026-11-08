@@ -133,3 +133,91 @@ def test_data_and_next_due_survive_application_restart(tmp_path):
         assert state['watches'][0]['next_due'] == due
         c.post(f'/api/watches/{id}/check', json={})
         assert len(c.get('/api/state').json()['events']) == 1
+
+
+def test_api_healthy_source_keeps_schedule_and_alerts_after_long_restart(tmp_path, monkeypatch):
+    """Exercise actual API/persistence with synthetic sources and a four-hour outage."""
+    clock = [time.time()]
+    monkeypatch.setattr('dealchecker.service.time.time', lambda: clock[0])
+    good, bad = FixtureSource(), FixtureSource()
+    bad.id, bad.name, bad.fail = 'bad', 'Broken fixture', True
+    config = Config(data_dir=tmp_path)
+    def app():
+        return create_app(config, adapters={'fixture':good, 'bad':bad}, start_scheduler=False)
+    payload = watch_payload(priority='critical')
+    payload['source_ids'] = ['fixture', 'bad']
+    with TestClient(app(), base_url='http://localhost') as c:
+        id = c.post('/api/watches', json=payload).json()['id']
+        assert c.post(f'/api/watches/{id}/check', json={}).json()['status'] == 'error'
+        state = c.get('/api/state').json()
+        assert state['watches'][0]['next_due'] == pytest.approx(clock[0] + 300, rel=0, abs=.01)
+        assert [e['total_cents'] for e in state['events']] == [1200]
+    clock[0] += 4 * 3600
+    good.price = 800
+    with TestClient(app(), base_url='http://localhost') as c:
+        c.post(f'/api/watches/{id}/check', json={})
+        state = c.get('/api/state').json()
+        assert sorted(e['total_cents'] for e in state['events']) == [1000, 1200]
+        assert state['watches'][0]['next_due'] == pytest.approx(clock[0] + 300, rel=0, abs=.01)
+        assert state['offers'][0]['stale'] is False
+
+
+def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypatch):
+    """Real Modula24 adapter and local API; merchant replies below are synthetic."""
+    from dealchecker.adapters.modula24 import Modula24Adapter
+
+    clock = [time.time()]
+    monkeypatch.setattr('dealchecker.service.time.time', lambda: clock[0])
+    monkeypatch.setattr('dealchecker.adapters.modula24.time', lambda: clock[0])
+
+    class Catalog:
+        price = '10.00 EUR'
+        calls = 0
+
+        async def get_json(self, url, **kwargs):
+            self.calls += 1
+            assert url == 'https://modula24.com/feeds/products.de.json'
+            assert kwargs['allowed_hosts'] == {'modula24.com'}
+            return {'generated': '2026-01-01T00:00:00Z', 'language': 'de', 'currency': 'EUR', 'items': [{
+                'id': 'M24-100', 'variant_id': '100', 'title': 'Synthetic Konnektor',
+                'link': 'https://modula24.com/products/synthetic-konnektor',
+                'price': self.price, 'availability': 'in_stock', 'brand': 'Modula24',
+                'product_type': 'Konnektoren', 'options': {},
+                'shipping': [{'countries': ['DE'], 'price': '3.99 EUR'}],
+            }]}
+
+    catalog = Catalog()
+    config = Config(data_dir=tmp_path)
+
+    def app():
+        return create_app(config, adapters={'modula24': Modula24Adapter(catalog)}, start_scheduler=False)
+
+    with TestClient(app(), base_url='http://localhost') as c:
+        discovery = c.post('/api/watches', json={
+            'name': 'Synthetic furniture search', 'kind': 'discovery',
+            'query': 'Konnektor', 'source_ids': ['modula24'],
+        }).json()['id']
+        assert c.post(f'/api/watches/{discovery}/check', json={}).json()['status'] == 'ok'
+        found = c.get('/api/state').json()['offers'][0]
+        assert found['product_id'] == '100'
+        assert found['total_cents'] == 1399
+        exact = c.post('/api/watches', json={
+            'name': 'Synthetic selected variant', 'kind': 'exact',
+            'product_id': found['product_id'], 'url': found['url'],
+            'source_ids': ['modula24'], 'target_cents': 1500,
+        }).json()['id']
+        assert c.post(f'/api/watches/{exact}/check', json={}).json()['status'] == 'ok'
+        assert catalog.calls == 1  # discovery and exact share the bounded catalogue cache
+        state = c.get('/api/state').json()
+        assert [e['total_cents'] for e in state['events']] == [1399]
+        exact_offer = next(o for o in state['offers'] if o['watch_id'] == exact)
+
+    clock[0] += 4 * 3600
+    catalog.price = '8.00 EUR'
+    with TestClient(app(), base_url='http://localhost') as c:
+        assert c.post(f'/api/watches/{exact}/check', json={}).json()['status'] == 'ok'
+        state = c.get('/api/state').json()
+        assert [e['total_cents'] for e in state['events']] == [1199, 1399]
+        assert catalog.calls == 2
+        history = c.get(f"/api/offers/{exact_offer['id']}/history").json()
+        assert [h['total_cents'] for h in history] == [1399, 1199]

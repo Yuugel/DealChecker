@@ -1,5 +1,7 @@
 # Prüfbericht — 08.11.2026
 
+**Historischer Stand vor dem externen PR-Review.** Die folgenden 83 Tests und Apple-Prüfungen beziehen sich auf `ef12e04`. Neue Quellenabdeckung, Regressionstests und erneute Live-Prüfungen sind im [Review-Fix-Prüfbericht](review-fixes.md) dokumentiert.
+
 ## Geprüfter Umfang
 
 Windows, Python 3.14.6, separate Projekt-venv mit `requirements.lock`. Quellcode auf `feature/local-mvp` im bestehenden Repository Yuugel/DealChecker. Das Projekt war zu Beginn leer. Kern/Adapter wurden mit Sol, die Oberfläche mit Luna in isolierten Git-Worktrees implementiert; Integration und Live-Prüfung erfolgten im Hauptcheckout. Ein unabhängiger Sol-Reviewer hat Kern, Sicherheit, Datenquellen und Oberfläche geprüft. Seine konkreten Befunde wurden korrigiert; die abschließende Prüfung der Korrekturen hatte keine verbleibenden Befunde im geprüften Umfang.

@@ -4,7 +4,7 @@ Modula24 veröffentlicht [eine eigene API-Dokumentation](https://modula24.com/pa
 
 ## Tatsächliche Abdeckung
 
-Der Feed enthält bestellbare Möbelteile, Zubehör und Werkzeuge **von Modula24** in deutscher Sprache. Es ist keine allgemeine Suche nach Haushaltswaren, Elektronik oder Lebensmitteln und kein Händlervergleich. Neue Treffer werden durch freie Suche über Titel, Hersteller, Kategorie und Variantenangaben im endlichen Katalog entdeckt. Exakte Überwachung verwendet die `variant_id` aus dem Feed. Die Angebots-URL erhält `?variant=ID`, damit Varianten desselben Produkts nicht vermischt werden. Die separate Bestands-API verwendet andere SKU-Kennungen; diese werden nicht mit Feed-Varianten-IDs gleichgesetzt.
+Der Feed enthält bestellbare Möbelteile, Zubehör und Werkzeuge **von Modula24** in deutscher Sprache. Es ist keine allgemeine Suche nach Haushaltswaren, Elektronik oder Lebensmitteln und kein Händlervergleich. Neue Treffer werden durch freie Suche über Titel, Hersteller und Kategorie im endlichen Katalog entdeckt. Exakte Überwachung verwendet die numerische `variant_id` aus dem Feed, beispielsweise `58436517069064` (ohne `M24-`-Präfix). Die Angebots-URL erhält `?variant=ID`, damit Varianten desselben Produkts nicht vermischt werden. Die separate Bestands-API verwendet andere SKU-Kennungen; diese werden nicht mit Feed-Varianten-IDs gleichgesetzt.
 
 Der Adapter übernimmt EUR-Preise, Verfügbarkeit und den im Feed angegebenen Versandpreis für **ein Stück nach Deutschland**. Fehlt ein DE-Versandpreis, bleibt Versand unbekannt. Mengenrabatte, Kombinationen im Warenkorb und der endgültige Kassenpreis können abweichen. Ein Angebot ist eine Momentaufnahme; vor dem Kauf zählt der Shoppreis.
 
