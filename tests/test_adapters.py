@@ -165,6 +165,18 @@ async def test_feed_same_product_from_two_merchants_is_allowed():
 
 
 @pytest.mark.asyncio
+async def test_exact_feed_title_preserves_multiple_merchants_but_rejects_variants():
+    client = FakeClient([{"offers": [feed_item(), feed_item(merchant="Other", url="https://other.example/item")]}])
+    adapter = FeedAdapter(client, {"id": "shop", "name": "Shop", "url": "https://feed.example/catalog.json"})
+    watch = WatchInput(name="Controller", query="Controller Blau", source_ids=["shop"])
+    assert {o.merchant for o in await adapter.lookup(watch)} == {"Example", "Other"}
+    other = FeedAdapter(FakeClient([{"offers": [feed_item(), feed_item(product_id="sku-2", variant="different pack")]}]),
+                        {"id": "shop", "name": "Shop", "url": "https://feed.example/catalog.json"})
+    with pytest.raises(ValueError, match="mehrdeutig"):
+        await other.lookup(watch)
+
+
+@pytest.mark.asyncio
 async def test_feed_rejects_malformed_rows_and_unsafe_links():
     for bad in (feed_item(price_cents="29.99"), feed_item(url="http://localhost/private"), feed_item(availability=None)):
         client = FakeClient([{"offers": [bad]}])

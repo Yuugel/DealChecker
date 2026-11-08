@@ -25,7 +25,7 @@ python -m venv .venv
 
 „Überwachung hinzufügen“ → „Dynamische Suche“ → beispielsweise **Monument Valley** → Quelle „Apple App Store DE“ → speichern und „Jetzt prüfen“. Neue Treffer stammen aus einer erneuten Quellensuche; sie müssen vorher nicht als URLs gespeichert sein.
 
-Für eine exakte Überwachung die numerische **App-ID** oder die deutsche `https://apps.apple.com/de/.../id…`-Produktadresse verwenden. Namen allein werden ausschließlich bei einem eindeutigen, exakt passenden Titel akzeptiert. Apple unterstützt keine EAN-, Modell- oder Variantenprüfung. Für physische Produkte unterstützen entsprechend ausgestattete Händlerfeeds diese Felder.
+Für eine exakte Überwachung die numerische **App-ID** oder die deutsche `https://apps.apple.com/de/.../id…`-Produktadresse verwenden. Alternativ den vollständigen Produktnamen in **Suchanfrage** eintragen: Er wird nur bei einem eindeutigen, exakt passenden Titel akzeptiert. Der Anzeigename ist eine eigene Bezeichnung für die Überwachung. Apple unterstützt keine EAN-, Modell- oder Variantenprüfung. Für physische Produkte unterstützen entsprechend ausgestattete Händlerfeeds diese Felder.
 
 Wunschpreise und Preisgrenzen gelten für den **Gesamtpreis einschließlich bekannter Versandkosten**. Bei unbekanntem Versand werden weder Gesamtpreisrabatte noch Wunschpreisalarme behauptet. App-Preise betreffen den einmaligen Downloadkauf; Abos und In-App-Käufe sind nicht enthalten.
 

@@ -128,7 +128,7 @@ class FeedAdapter(Adapter):
         else:
             title = watch.query or watch.name
             matches = [offer for offer in offers if offer.name.casefold() == title.casefold()]
-            if len(matches) > 1:
+            if len({(offer.product_id, offer.variant) for offer in matches}) > 1:
                 raise ValueError("Feed-Titel ist mehrdeutig; bitte Produkt-ID auswählen")
             if not matches:
                 raise ValueError("Feed-Titel nicht gefunden; bitte Produkt-ID auswählen")
