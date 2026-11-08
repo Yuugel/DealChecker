@@ -25,7 +25,14 @@ class DiscordNotifier:
             cents = event["savings_cents"]
             lines.append(f"Preisunterschied zur eigenen Historie: {cents // 100},{cents % 100:02d} €")
         observed = datetime.fromtimestamp(event["checked_at"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        lines.append(f"Beobachtet: {observed} · Verfügbarkeit: {event['availability']}")
+        availability = event["availability"]
+        if availability == "in_stock":
+            status = "Laut Feed verfügbar" if event.get("provenance") == "feed" else "Verfügbar (laut Quelle)"
+        elif availability == "out_of_stock":
+            status = "Laut Feed nicht verfügbar" if event.get("provenance") == "feed" else "Nicht verfügbar (laut Quelle)"
+        else:
+            status = "Verfügbarkeit unbekannt"
+        lines.append(f"Beobachtet: {observed} · {status}")
         lines.append(event["url"])
         content = "\n".join(lines)
         await self.client.post_json(self.webhook_url,

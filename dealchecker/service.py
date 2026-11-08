@@ -3,7 +3,7 @@ import asyncio
 import statistics
 import time
 
-from .db import Database, interval
+from .db import Database, FEED_FRESH_SECONDS, interval
 from .models import Offer, WatchInput
 
 
@@ -53,6 +53,8 @@ def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: 
     if offer.total_cents is None or offer.availability != "in_stock":
         return "Unzureichende Daten", comparison, savings, None
     fresh = now - offer.checked_at <= 2 * interval_seconds and offer.checked_at <= now + 60 and offer.quality != "feed_stale"
+    if offer.provenance == "feed" and now - offer.checked_at > FEED_FRESH_SECONDS:
+        fresh = False
     if history and offer.checked_at <= history[-1]["checked_at"]:
         fresh = False
     if not fresh:
@@ -115,12 +117,18 @@ class Engine:
         watch = WatchInput.model_validate({k: v for k, v in row.items() if k in WatchInput.model_fields})
         results: list[Offer] = []
         errors = []
+        active_source = None
 
         async def fetch():
+            nonlocal active_source
             for source in watch.source_ids:
+                active_source = source
                 adapter = self.adapters.get(source)
                 if adapter is None:
-                    errors.append(f"{source}: source unavailable")
+                    message = "source unavailable"
+                    errors.append(f"{source}: {message}")
+                    self.db.record_source_status(source, message, time.time())
+                    active_source = None
                     continue
                 try:
                     method = adapter.search if watch.kind == "discovery" else adapter.lookup
@@ -133,15 +141,23 @@ class Engine:
                         if offer.source != source:
                             raise ValueError("source identity mismatch")
                         results.append(offer)
+                    self.db.record_source_status(source, None, time.time())
                 except (ValueError, RuntimeError, OSError) as exc:
-                    errors.append(f"{source}: {str(exc)[:200]}")
+                    message = str(exc)[:200]
+                    errors.append(f"{source}: {message}")
+                    self.db.record_source_status(source, message, time.time())
                 except Exception as exc:
-                    errors.append(f"{source}: {type(exc).__name__} failure")
+                    message = f"{type(exc).__name__} failure"
+                    errors.append(f"{source}: {message}")
+                    self.db.record_source_status(source, message, time.time())
+                active_source = None
 
         try:
             await asyncio.wait_for(fetch(), timeout=60)
         except asyncio.TimeoutError:
             errors.append("check deadline exceeded")
+            if active_source is not None:
+                self.db.record_source_status(active_source, "check deadline exceeded", time.time())
         latest = self.db.get_watch(id)
         if latest is None:
             return {"status": "missing", "offers": 0, "error": None}
@@ -158,7 +174,8 @@ class Engine:
                         unique[item.key] = item
             except ValueError as exc:
                 errors.append(f"{item.source}: {str(exc)[:200]}")
-        if watch.kind == "exact" and watch.query and not any((watch.product_id, watch.url, watch.gtin, watch.model, watch.variant)) and len(unique) > 1:
+        identities = {(item.source, item.product_id, item.variant) for item in unique.values()}
+        if watch.kind == "exact" and watch.query and not any((watch.product_id, watch.url, watch.gtin, watch.model, watch.variant)) and len(identities) > 1:
             errors.append("exact title is ambiguous")
             unique.clear()
         if watch.kind == "exact" and not unique and not errors:

@@ -137,7 +137,7 @@ async def test_partial_error_persists_success_backoff_and_staleness(tmp_path):
     assert result["status"] == "error" and result["offers"] == 1
     assert "broken" in result["error"]
     assert db.get_watch(row["id"])["failure_count"] == 1
-    assert db.list_offers(row["id"])[0]["stale"] is True
+    assert db.list_offers(row["id"])[0]["stale"] is False
     assert db.list_checks()[0]["status"] == "error"
     await engine.close()
 
@@ -377,10 +377,10 @@ async def test_discord_payload_includes_observed_context():
     await notifier.send({"reason": "Neuer Bestpreis", "product": "Synthetic Widget", "merchant": "Synthetic Shop",
                          "total_cents": 900, "comparison_cents": 1200, "savings_cents": 300,
                          "url": "https://example.org/item", "checked_at": 1_700_000_000,
-                         "availability": "in_stock"})
+                         "availability": "in_stock", "provenance": "feed"})
     content = client.payload["content"]
     assert "12,00" in content and "3,00" in content
-    assert "2023" in content and "in_stock" in content
+    assert "2023" in content and "Laut Feed verfügbar" in content
 
 
 def test_outbox_status_and_exponential_backoff(tmp_path):
@@ -496,12 +496,139 @@ def test_version_one_migration_deduplicates_old_replays(tmp_path):
     offer_id = db.list_offers(row["id"])[0]["id"]
     with db.conn:
         db.conn.execute("DROP INDEX IF EXISTS observations_unique_time")
+        db.conn.execute("DROP TABLE IF EXISTS source_status")
+        db.conn.execute("ALTER TABLE offers DROP COLUMN seen_at")
         db.conn.execute("PRAGMA user_version=1")
         db.conn.execute("INSERT INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) "
                         "SELECT offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance "
                         "FROM observations WHERE offer_id=?", (offer_id,))
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 2
+    assert reopened.schema_version == 3
     assert len(reopened.history(offer_id)) == 1
     reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_source_status_tracks_each_source_and_survives_restart(tmp_path):
+    class Empty(Adapter):
+        async def search(self, watch):
+            return []
+
+    class Broken(Adapter):
+        async def search(self, watch):
+            raise RuntimeError("synthetic unavailable")
+
+    path = tmp_path / "sources.db"
+    db = Database(path)
+    row = db.create_watch(watch(kind="discovery", source_ids=["healthy", "broken"]))
+    empty = Empty()
+    broken = Broken()
+    engine = Engine(db, {"healthy": empty, "broken": broken})
+    result = await engine.check_watch(row["id"])
+    assert result["status"] == "error" and result["offers"] == 0
+    statuses = db.source_statuses()
+    assert statuses["healthy"]["last_checked"] is not None
+    assert statuses["healthy"]["last_success"] is not None
+    assert statuses["healthy"]["last_error"] is None
+    assert statuses["broken"]["last_checked"] is not None
+    assert statuses["broken"]["last_success"] is None
+    assert "synthetic unavailable" in statuses["broken"]["last_error"]
+    await engine.close()
+    db.close()
+    reopened = Database(path)
+    assert reopened.schema_version == 3
+    assert reopened.source_statuses() == statuses
+    reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_feed_observation_older_than_ten_minutes_is_stale_and_cannot_alert(tmp_path):
+    db = Database(tmp_path / "feed.db")
+    row = db.create_watch(watch(priority="low", target_cents=1500))
+    item = offer(1000, checked_at=time.time() - 601, provenance="feed", quality="feed_reported")
+    engine = Engine(db, {"synthetic": Adapter([item])})
+    await engine.check_watch(row["id"])
+    latest = db.list_offers(row["id"])[0]
+    assert latest["stale"] is True
+    assert db.list_events() == []
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_exact_product_from_two_merchants_is_not_ambiguous(tmp_path):
+    db = Database(tmp_path / "exact.db")
+    row = db.create_watch(watch())
+    a = offer()
+    b = offer().model_copy(update={"merchant": "Second Synthetic Shop"})
+    engine = Engine(db, {"synthetic": Adapter([a, b])})
+    result = await engine.check_watch(row["id"])
+    assert result["status"] == "ok" and result["offers"] == 2
+    assert len(db.list_offers(row["id"])) == 2
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_stales_only_failed_source(tmp_path):
+    class Catalog(Adapter):
+        def __init__(self, item):
+            self.item = item
+            self.fail = False
+        async def search(self, watch):
+            if self.fail:
+                raise RuntimeError("synthetic unavailable")
+            return [self.item]
+
+    db = Database(tmp_path / "partial.db")
+    row = db.create_watch(watch(kind="discovery", query="Synthetic", source_ids=["good", "bad"]))
+    good = Catalog(offer().model_copy(update={"source": "good"}))
+    bad = Catalog(offer().model_copy(update={"source": "bad"}))
+    engine = Engine(db, {"good": good, "bad": bad})
+    assert (await engine.check_watch(row["id"]))["status"] == "ok"
+    bad.fail = True
+    assert (await engine.check_watch(row["id"]))["status"] == "error"
+    offers = {x["source"]: x for x in db.list_offers(row["id"])}
+    assert offers["good"]["stale"] is False
+    assert offers["bad"]["stale"] is True
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_filtered_out_offer_becomes_stale_after_successful_check(tmp_path):
+    db = Database(tmp_path / "filtered.db")
+    row = db.create_watch(watch(kind="discovery", query="Synthetic", max_price_cents=1500))
+    adapter = Adapter([offer(900)])
+    engine = Engine(db, {"synthetic": adapter})
+    assert (await engine.check_watch(row["id"]))["offers"] == 1
+    adapter.results = [offer(1600)]
+    result = await engine.check_watch(row["id"])
+    assert result["status"] == "ok" and result["offers"] == 0
+    retained = db.list_offers(row["id"])[0]
+    assert retained["price_cents"] == 900 and retained["stale"] is True
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_cached_replay_seen_again_remains_fresh_without_history_growth(tmp_path):
+    db = Database(tmp_path / "replay.db")
+    row = db.create_watch(watch())
+    fixed = offer(checked_at=time.time())
+    engine = Engine(db, {"synthetic": Adapter([fixed])})
+    await engine.check_watch(row["id"])
+    await engine.check_watch(row["id"])
+    latest = db.list_offers(row["id"])[0]
+    assert latest["stale"] is False
+    assert len(db.history(latest["id"])) == 1
+    await engine.close()
+
+
+def test_event_records_source_provenance(tmp_path):
+    db = Database(tmp_path / "event.db")
+    row = db.create_watch(watch(target_cents=1500))
+    item = offer(provenance="feed", quality="feed_reported")
+    db.record_check(row["id"], [(item, "Wunschpreis erreicht", None, None, "Wunschpreis erreicht")],
+                    "ok", None, time.time())
+    event = db.list_events()[0]
+    assert event["source"] == "synthetic"
+    assert event["provenance"] == "feed"
+    assert event["quality"] == "feed_reported"

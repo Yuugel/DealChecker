@@ -6,7 +6,8 @@ from pathlib import Path
 
 from .models import Offer, WatchInput
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+FEED_FRESH_SECONDS = 600
 INTERVALS = {"critical": 300, "high": 900, "normal": 1800, "low": 3600}
 
 
@@ -70,6 +71,20 @@ class Database:
                 );
                 CREATE UNIQUE INDEX observations_unique_time ON observations(offer_id,checked_at);
                 PRAGMA user_version=2;
+                COMMIT;
+                """)
+            version = 2
+        if version < 3:
+            self.conn.executescript("""
+                BEGIN IMMEDIATE;
+                ALTER TABLE offers ADD COLUMN seen_at REAL NOT NULL DEFAULT 0;
+                CREATE TABLE source_status (
+                    source_id TEXT PRIMARY KEY,
+                    last_checked REAL NOT NULL,
+                    last_success REAL,
+                    last_error TEXT
+                );
+                PRAGMA user_version=3;
                 COMMIT;
                 """)
 
@@ -150,18 +165,22 @@ class Database:
         return self.get_settings()
 
     def list_offers(self, watch_id: int | None = None) -> list[dict]:
-        sql = "SELECT o.*,w.data AS watch_data,w.next_due,w.last_error FROM offers o JOIN watches w ON w.id=o.watch_id"
+        sql = "SELECT o.*,w.data AS watch_data,w.next_due,w.last_checked FROM offers o JOIN watches w ON w.id=o.watch_id"
         args = ()
         if watch_id is not None:
             sql += " WHERE o.watch_id=?"
             args = (watch_id,)
         sql += " ORDER BY o.observed_at DESC,o.id DESC"
         now = time.time()
+        statuses = self.source_statuses()
         result = []
         for r in self.conn.execute(sql, args):
             data = json.loads(r["data"])
             watch = json.loads(r["watch_data"])
-            stale = (r["last_error"] is not None or now >= r["next_due"] or data.get("quality") == "feed_stale"
+            source_error = statuses.get(data["source"], {}).get("last_error")
+            stale = (source_error is not None or r["seen_at"] < r["last_checked"]
+                     or now >= r["next_due"] or data.get("quality") == "feed_stale"
+                     or (data.get("provenance") == "feed" and now - r["observed_at"] > FEED_FRESH_SECONDS)
                      or now - r["observed_at"] > 2 * interval(watch, self.get_settings()))
             result.append({"id": r["id"], "watch_id": r["watch_id"], **data,
                            "stale": stale, "evaluation": r["evaluation"],
@@ -183,6 +202,20 @@ class Database:
 
     def list_checks(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM checks ORDER BY id DESC LIMIT 200")]
+
+    def record_source_status(self, source: str, error: str | None, checked_at: float):
+        with self.conn:
+            self.conn.execute("""INSERT INTO source_status(source_id,last_checked,last_success,last_error)
+                VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET
+                last_checked=excluded.last_checked,
+                last_success=CASE WHEN excluded.last_error IS NULL THEN excluded.last_checked ELSE source_status.last_success END,
+                last_error=excluded.last_error""",
+                (source, checked_at, checked_at if error is None else None, error))
+
+    def source_statuses(self) -> dict[str, dict]:
+        return {r["source_id"]: {"last_checked": r["last_checked"],
+                                  "last_success": r["last_success"], "last_error": r["last_error"]}
+                for r in self.conn.execute("SELECT * FROM source_status")}
 
     def prior(self, watch_id: int, key: str) -> tuple[list[dict], int | None, bool]:
         row = self.conn.execute("SELECT id FROM offers WHERE watch_id=? AND offer_key=?", (watch_id, key)).fetchone()
@@ -210,9 +243,10 @@ class Database:
                     oid = existing[0]
                     self.conn.execute("UPDATE offers SET data=?,evaluation=?,comparison_cents=?,savings_cents=?,observed_at=? WHERE id=? AND observed_at<?",
                                       (json.dumps(data), evaluation, comparison, savings, item.checked_at, oid, item.checked_at))
+                    self.conn.execute("UPDATE offers SET seen_at=? WHERE id=?", (checked_at, oid))
                 else:
-                    oid = self.conn.execute("INSERT INTO offers(watch_id,offer_key,data,evaluation,comparison_cents,savings_cents,observed_at) VALUES(?,?,?,?,?,?,?)",
-                                            (watch_id, item.key, json.dumps(data), evaluation, comparison, savings, item.checked_at)).lastrowid
+                    oid = self.conn.execute("INSERT INTO offers(watch_id,offer_key,data,evaluation,comparison_cents,savings_cents,observed_at,seen_at) VALUES(?,?,?,?,?,?,?,?)",
+                                            (watch_id, item.key, json.dumps(data), evaluation, comparison, savings, item.checked_at, checked_at)).lastrowid
                 self.conn.execute("INSERT OR IGNORE INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) VALUES(?,?,?,?,?,?,?)",
                                   (oid, item.checked_at, item.price_cents, item.shipping_cents, item.total_cents,
                                    item.availability, item.provenance))
@@ -220,7 +254,8 @@ class Database:
                     event = {"product": item.name, "name": item.name, "merchant": item.merchant,
                              "total_cents": item.total_cents, "comparison_cents": comparison,
                              "savings_cents": savings, "url": item.url, "checked_at": item.checked_at,
-                             "availability": item.availability, "reason": reason}
+                             "availability": item.availability, "reason": reason,
+                             "source": item.source, "provenance": item.provenance, "quality": item.quality}
                     cur = self.conn.execute("INSERT OR IGNORE INTO events(watch_id,offer_key,total_cents,data,created_at,last_alerted_total) VALUES(?,?,?,?,?,?)",
                                             (watch_id, item.key, item.total_cents, json.dumps(event), checked_at, item.total_cents))
                     if cur.rowcount and self.get_settings()["notification_enabled"]:
