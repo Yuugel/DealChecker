@@ -42,7 +42,7 @@
 
       <section class="coverage-banner" aria-label="Quellenabdeckung">
         <div class="coverage-icon" aria-hidden="true">◌</div>
-        <div class="coverage-copy"><strong>Quellenabdeckung</strong><span>Apple App Store DE: App-Kaufpreise ohne Abos/In-App-Käufe. Modula24: Möbelteile und Zubehör; Versand für ein Stück nach Deutschland, soweit im Feed angegeben.</span></div>
+        <div class="coverage-copy"><strong>Quellenabdeckung</strong><span>Apple App Store DE: App-Kaufpreise ohne Abos/In-App-Käufe. Modula24: Möbelteile und Zubehör; Versand für ein Stück nach Deutschland, soweit im Feed angegeben. Bestenvergleich: Referenzpreise für Elektronik und Haushaltsgeräte ohne Händlerangebot.</span></div>
         <span class="coverage-pill" id="coverage-status"><span class="health-dot"></span> Status unbekannt</span>
       </section>
 
@@ -72,7 +72,7 @@
       <section class="content-section settings-section" id="settings">
         <div class="section-heading"><div><p class="eyebrow">LAUFZEIT &amp; MELDUNGEN</p><h2>Einstellungen</h2><p class="section-note">Steuere automatische Prüfungen und Benachrichtigungen.</p></div></div>
         <div class="settings-grid">
-          <article class="panel settings-panel"><div class="panel-heading"><div><h3>Prüfungen</h3><p>Steuerung für den lokalen Scheduler</p></div><span class="panel-mark mark-blue">⚙</span></div><label class="setting-row"><span><strong>Alle automatischen Prüfungen pausieren</strong><small>Manuelle Prüfungen sind während einer Pause ebenfalls ausgesetzt.</small></span><input type="checkbox" id="setting-paused" class="switch"></label><label class="setting-row"><span><strong>24‑Stunden‑Modus</strong><small>Intervallverkürzung bis zum Ablaufzeitpunkt.</small></span><input type="checkbox" id="setting-bf" class="switch"></label><p class="setting-status" id="bf-status"></p></article>
+          <article class="panel settings-panel"><div class="panel-heading"><div><h3>Prüfungen</h3><p>Steuerung für den lokalen Scheduler</p></div><span class="panel-mark mark-blue">⚙</span></div><label class="setting-row"><span><strong>Alle automatischen Prüfungen pausieren</strong><small>Manuelle Prüfungen sind während einer Pause ebenfalls ausgesetzt.</small></span><input type="checkbox" id="setting-paused" class="switch"></label><label class="setting-row"><span><strong>Black-Friday-Modus</strong><small>Temporär kürzere quellenspezifische Intervalle.</small></span><input type="checkbox" id="setting-bf" class="switch"></label><label class="field bf-duration">Dauer<select id="setting-bf-duration"><option value="86400">24 Stunden</option><option value="604800">7 Tage</option></select></label><p class="setting-status" id="bf-status"></p></article>
           <article class="panel settings-panel"><div class="panel-heading"><div><h3>Benachrichtigungen</h3><p>Lokale Ereignisse bleiben immer sichtbar.</p></div><span class="panel-mark mark-amber">♧</span></div><label class="setting-row"><span><strong>Benachrichtigungen aktivieren</strong><small id="notification-status">Konfigurationsstatus wird geladen.</small></span><input type="checkbox" id="setting-notifications" class="switch"></label><div id="settings-feedback" class="inline-feedback" role="status"></div></article>
         </div>
       </section>
@@ -89,7 +89,7 @@
           <label class="field field-wide">Anzeigename <span class="required-mark">*</span><input id="watch-name" required maxlength="160" autocomplete="off" placeholder="z. B. Monument Valley"></label>
           <fieldset class="field field-wide kind-choice"><legend>Suchmodus</legend><label><input type="radio" name="watch-kind" value="exact" checked> Exakt <small>Ein eindeutig bestimmtes Produkt</small></label><label><input type="radio" name="watch-kind" value="discovery"> Entdecken <small>Passende Treffer zur Suchanfrage</small></label></fieldset>
           <label class="field field-wide">Suchanfrage<input id="watch-query" maxlength="300" placeholder="Titel oder Suchbegriffe"></label>
-          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Apple ist standardmäßig ausgewählt. Modula24 deckt nur physische Möbelteile und Zubehör ab; nutze dafür konkrete Begriffe wie „Kugel“ oder „Konnektor“.</small></fieldset>
+          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Apple ist standardmäßig ausgewählt. Für breitere Elektronik- und Haushaltskategorien Bestenvergleich auswählen; dies liefert Referenzpreise ohne Händler- oder Versandangabe. Modula24 deckt Möbelteile und Zubehör ab.</small></fieldset>
           <label class="field">Produkt-ID<input id="watch-product-id" maxlength="160" placeholder="Track ID oder Quell-ID"></label>
           <label class="field">Produkt-URL<input id="watch-url" type="url" maxlength="2048" placeholder="App-Store- oder Modula24-Produktlink"></label>
           <label class="field">GTIN / EAN<input id="watch-gtin" maxlength="32" inputmode="numeric"></label>
@@ -102,9 +102,11 @@
           <label class="field">Händler einschließen <small>Kommagetrennt</small><textarea id="watch-merchants-include" rows="2" maxlength="1000"></textarea></label>
           <label class="field">Händler ausschließen <small>Kommagetrennt</small><textarea id="watch-merchants-exclude" rows="2" maxlength="1000"></textarea></label>
           <label class="field">Wunschpreis in EUR<input id="watch-target" inputmode="decimal" placeholder="z. B. 4,99"></label>
-          <label class="field">Preislimit in EUR<input id="watch-max" inputmode="decimal" placeholder="z. B. 9,99"></label>
+          <label class="field">Preislimit in EUR<input id="watch-max" inputmode="decimal" placeholder="z. B. 9,99"><small>Gilt für Gesamtpreise. Referenzen ohne Versand werden ausgefiltert.</small></label>
           <label class="field">Priorität<select id="watch-priority"><option value="critical">Kritisch · 5 Min.</option><option value="high">Hoch · 15 Min.</option><option value="normal" selected>Normal · 30 Min.</option><option value="low">Niedrig · 60 Min.</option></select></label>
-          <label class="field">Eigenes Prüfintervall in Sekunden<input id="watch-interval" type="number" min="300" max="86400" step="1" placeholder="Automatisch nach Priorität"></label>
+          <label class="field">Normales Prüfintervall in Sekunden<input id="watch-interval" type="number" min="300" max="86400" step="1" placeholder="Automatisch nach Typ und Priorität"><small>Leer lassen für den Standard dieses Beobachtungstyps.</small></label>
+          <label class="field">Black-Friday-Intervall in Sekunden<input id="watch-bf-interval" type="number" min="300" max="86400" step="1" placeholder="Automatisch nach Typ und Priorität"><small>Optional; 300 bis 86400 Sekunden.</small></label>
+          <fieldset class="field field-wide source-interval-field"><legend>Quellenspezifische Intervalle <small>Optional; leer = normales Intervall übernehmen</small></legend><div id="source-interval-options" class="source-interval-options"></div></fieldset>
           <label class="field field-wide pause-row"><span><strong>Diese Beobachtung pausieren</strong><small>Während der Pause werden keine automatischen oder manuellen Abfragen ausgeführt.</small></span><input type="checkbox" id="watch-paused" class="switch"></label>
         </div>
       </div>
