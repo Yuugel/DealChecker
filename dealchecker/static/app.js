@@ -5,7 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const byId = (id) => document.getElementById(id);
   const API = '/api';
-  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
+  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, notificationConfigBusy: false, notificationFeedback: '', search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
   const dialog = byId('watch-dialog');
   const resolveDialog = byId('resolve-dialog');
 
@@ -386,10 +386,19 @@
     byId('setting-bf-duration').disabled = false;
     byId('bf-status').textContent = until > Date.now() / 1000 ? `Aktiv bis ${fmtTime(until)}.` : 'Der Modus ist nicht aktiv.';
     const configured = !!data.notification_configured;
+    const configSource = data.notification_configuration_source || (configured ? 'environment' : 'none');
     byId('setting-notifications').checked = !!settings.notification_enabled;
     byId('setting-notifications').disabled = !configured;
     byId('notification-status').textContent = configured ? 'Kanal ist konfiguriert; lokale Ereignisse werden unabhängig davon gespeichert.' : 'Kein Benachrichtigungskanal konfiguriert. Der Schalter ist daher nicht verfügbar.';
-    byId('settings-feedback').textContent = '';
+    byId('notification-webhook').disabled = configSource === 'environment' || state.notificationConfigBusy;
+    byId('notification-config-save').disabled = configSource === 'environment' || state.notificationConfigBusy;
+    byId('notification-config-remove').disabled = configSource !== 'local' || state.notificationConfigBusy;
+    byId('notification-config-help').textContent = configSource === 'environment'
+      ? 'Die Webhook-Adresse stammt aus der Dienstumgebung und kann hier nicht bearbeitet werden.'
+      : configSource === 'local'
+        ? 'Eine lokale Adresse ist gespeichert, wird aber aus Sicherheitsgründen nie erneut angezeigt. Eine neue Eingabe ersetzt sie.'
+        : 'Webhook-Adresse wird lokal gespeichert. Das Speichern sendet keine Testnachricht und aktiviert Benachrichtigungen nicht.';
+    byId('settings-feedback').textContent = state.notificationFeedback;
   }
   function render(data) {
     state.data = data;
@@ -706,6 +715,44 @@
       await refresh();
     } catch (error) { status.textContent = `Einstellung konnte nicht gespeichert werden: ${error.message}`; toast(status.textContent, 'error'); await refresh(); }
   }
+  async function saveNotificationConfiguration(event) {
+    event.preventDefault();
+    if (state.notificationConfigBusy) return;
+    const field = byId('notification-webhook');
+    const webhookUrl = field.value.trim();
+    if (!safeHttpsUrl(webhookUrl)) { state.notificationFeedback = 'Bitte eine gültige HTTPS-Webhook-Adresse eingeben.'; byId('settings-feedback').textContent = state.notificationFeedback; field.focus(); return; }
+    state.notificationConfigBusy = true;
+    renderSettings(state.data || {});
+    try {
+      await api('/notifications/config', { method: 'PUT', body: { webhook_url: webhookUrl } });
+      field.value = '';
+      state.notificationFeedback = 'Webhook lokal gespeichert. Benachrichtigungen bleiben separat geschaltet.';
+      await refresh();
+    } catch {
+      state.notificationFeedback = 'Webhook konnte nicht gespeichert werden. Prüfe die Adresse und versuche es erneut.';
+    } finally {
+      state.notificationConfigBusy = false;
+      if (state.data) renderSettings(state.data);
+      byId('settings-feedback').textContent = state.notificationFeedback;
+    }
+  }
+  async function removeNotificationConfiguration() {
+    if (state.notificationConfigBusy) return;
+    state.notificationConfigBusy = true;
+    renderSettings(state.data || {});
+    try {
+      await api('/notifications/config', { method: 'DELETE' });
+      byId('notification-webhook').value = '';
+      state.notificationFeedback = 'Lokale Webhook-Konfiguration entfernt.';
+      await refresh();
+    } catch {
+      state.notificationFeedback = 'Lokale Webhook-Konfiguration konnte nicht entfernt werden.';
+    } finally {
+      state.notificationConfigBusy = false;
+      if (state.data) renderSettings(state.data);
+      byId('settings-feedback').textContent = state.notificationFeedback;
+    }
+  }
   function bind() {
     byId('watch-form').addEventListener('submit', saveWatch);
     byId('quick-name-form').addEventListener('submit', event => { event.preventDefault(); const query = byId('quick-name').value.trim(); if (query) openDiscoverySearch(query); });
@@ -736,6 +783,8 @@
       }
     });
     byId('setting-notifications').addEventListener('change', event => updateSettings('notification_enabled', event.target.checked, event.target.checked ? 'Benachrichtigungen aktiviert.' : 'Benachrichtigungen deaktiviert.'));
+    byId('notification-config-form').addEventListener('submit', saveNotificationConfiguration);
+    byId('notification-config-remove').addEventListener('click', removeNotificationConfiguration);
     $$('.nav-link').forEach(link => link.addEventListener('click', () => { $$('.nav-link').forEach(item => item.classList.toggle('active', item === link)); }));
   }
   bind();
