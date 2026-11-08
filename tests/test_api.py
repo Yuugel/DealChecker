@@ -100,6 +100,24 @@ def test_settings_validation_and_security_headers(client):
     assert "default-src 'self'" in response.headers['Content-Security-Policy']
 
 
+def test_sources_report_their_own_success_and_failure(tmp_path):
+    good, bad = FixtureSource(), FixtureSource()
+    bad.id, bad.name, bad.fail = 'bad', 'Broken fixture', True
+    with TestClient(create_app(Config(data_dir=tmp_path), adapters={'fixture':good,'bad':bad}, start_scheduler=False),
+                    base_url='http://localhost') as c:
+        payload = watch_payload()
+        payload['source_ids'] = ['fixture','bad']
+        id = c.post('/api/watches', json=payload).json()['id']
+        assert c.post(f'/api/watches/{id}/check', json={}).json()['status'] == 'error'
+        state = c.get('/api/state').json()
+        sources = {s['id']:s for s in state['sources']}
+        assert sources['fixture']['last_error'] is None
+        assert sources['fixture']['last_success'] > 0
+        assert sources['bad']['last_error']
+        assert sources['bad']['last_success'] is None
+        assert state['offers'][0]['stale'] is False
+
+
 def test_data_and_next_due_survive_application_restart(tmp_path):
     config = Config(data_dir=tmp_path)
     source = FixtureSource()

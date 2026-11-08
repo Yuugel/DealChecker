@@ -76,10 +76,11 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
         for watch in watches:
             watch['running'] = app.state.engine.is_running(watch['id'])
         sources = source_catalog(app.state.registry)
+        statuses = db.source_statuses()
         for source in sources:
-            relevant = [w for w in watches if source['id'] in w['source_ids']]
-            source['last_checked'] = max((w.get('last_checked') or 0 for w in relevant), default=0) or None
-            source['last_error'] = next((w['last_error'] for w in relevant if w.get('last_error')), None)
+            source.update(statuses.get(source['id'], {
+                'last_checked':None, 'last_success':None, 'last_error':None,
+            }))
         return {'watches':watches, 'offers':db.list_offers(), 'events':db.list_events(),
                 'checks':checks, 'settings':db.get_settings(), 'sources':sources,
                 'notification_configured':bool(config.discord_webhook)}
