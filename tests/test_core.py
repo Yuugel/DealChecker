@@ -506,7 +506,7 @@ def test_version_one_migration_deduplicates_old_replays(tmp_path):
                         "FROM observations WHERE offer_id=?", (offer_id,))
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 5
+    assert reopened.schema_version == 6
     assert len(reopened.history(offer_id)) == 1
     reopened.close()
 
@@ -539,7 +539,7 @@ async def test_source_status_tracks_each_source_and_survives_restart(tmp_path):
     await engine.close()
     db.close()
     reopened = Database(path)
-    assert reopened.schema_version == 5
+    assert reopened.schema_version == 6
     assert reopened.source_statuses() == statuses
     reopened.close()
 

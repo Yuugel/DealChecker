@@ -8,7 +8,7 @@ from .models import Offer, WatchInput
 from .identity import comparison_identity
 from .scheduling import OLD_DEFAULTS, interval, interval_pair
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 FEED_FRESH_SECONDS = 600
 
 
@@ -128,6 +128,16 @@ class Database:
             except Exception:
                 self.conn.rollback()
                 raise
+            version = 5
+        if version < 6:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute("ALTER TABLE watch_sources ADD COLUMN pending_refresh INTEGER NOT NULL DEFAULT 0")
+                self.conn.execute("PRAGMA user_version=6")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     @property
     def schema_version(self):
@@ -168,17 +178,19 @@ class Database:
                 for source in data.source_ids:
                     state = old.get(source)
                     if state is None:
-                        values = (id, source, now, 0, None, None, 0)
+                        values = (id, source, now, 0, None, None, 0, 0)
                     else:
                         minimum = state["min_interval_seconds"]
                         candidate = (state["last_checked"] + interval(new_data, settings, source, minimum, now) *
                                      min(2 ** state["failure_count"], 16)) if state["last_checked"] is not None else state["next_due"]
-                        due = max(state["next_due"], candidate) if state["failure_count"] else (now if changed_query else candidate)
+                        pending = bool(state["pending_refresh"] or (changed_query and not state["failure_count"]))
+                        due = max(state["next_due"], candidate) if state["failure_count"] else (now if changed_query else
+                                                                                               state["next_due"] if pending else candidate)
                         values = (id, source, due, state["failure_count"], state["last_error"],
-                                  state["last_checked"], minimum)
+                                  state["last_checked"], minimum, int(pending))
                     self.conn.execute("""INSERT INTO watch_sources
-                        (watch_id,source_id,next_due,failure_count,last_error,last_checked,min_interval_seconds)
-                        VALUES(?,?,?,?,?,?,?)""", values)
+                        (watch_id,source_id,next_due,failure_count,last_error,last_checked,min_interval_seconds,pending_refresh)
+                        VALUES(?,?,?,?,?,?,?,?)""", values)
                 current = self.source_schedules(id)
                 errors = [f"{source}: {state['last_error']}" for source, state in current.items() if state["last_error"]]
                 self.conn.execute("UPDATE watches SET next_due=?,failure_count=?,last_error=? WHERE id=?",
@@ -202,7 +214,7 @@ class Database:
     def force_due(self, id: int, when: float):
         with self.conn:
             self.conn.execute("UPDATE watches SET next_due=? WHERE id=?", (when, id))
-            self.conn.execute("UPDATE watch_sources SET next_due=? WHERE watch_id=?", (when, id))
+            self.conn.execute("UPDATE watch_sources SET next_due=?,pending_refresh=1 WHERE watch_id=?", (when, id))
 
     def source_schedules(self, id: int) -> dict[str, dict]:
         return {r["source_id"]: dict(r) for r in self.conn.execute(
@@ -237,7 +249,7 @@ class Database:
                     continue
                 watch = self._watch(self.conn.execute("SELECT * FROM watches WHERE id=?", (state["watch_id"],)).fetchone())
                 minimum = max(0, minimums[source])
-                if state["last_checked"] is None:
+                if state["last_checked"] is None or state["pending_refresh"]:
                     due = state["next_due"]
                 else:
                     candidate = state["last_checked"] + interval(watch, settings, source, minimum, now) * min(
@@ -265,7 +277,7 @@ class Database:
         for raw in self.conn.execute("SELECT * FROM watches"):
             watch = self._watch(raw)
             for source in self.source_schedules(watch["id"]).values():
-                if source["last_checked"] is None:
+                if source["last_checked"] is None or source["pending_refresh"]:
                     continue
                 delay = interval(watch, settings, source["source_id"], source["min_interval_seconds"], now)
                 candidate = source["last_checked"] + delay * min(2 ** source["failure_count"], 16)
@@ -433,7 +445,7 @@ class Database:
                     continue
                 failure = previous[0] + 1 if source_error else 0
                 delay = interval(row, self.get_settings(), source, minimum, checked_at) * (min(2 ** failure, 16) if failure else 1)
-                self.conn.execute("""UPDATE watch_sources SET next_due=?,failure_count=?,last_error=?,last_checked=?,min_interval_seconds=?
+                self.conn.execute("""UPDATE watch_sources SET next_due=?,failure_count=?,last_error=?,last_checked=?,min_interval_seconds=?,pending_refresh=0
                     WHERE watch_id=? AND source_id=?""",
                     (checked_at + delay, failure, source_error, checked_at, minimum, watch_id, source))
                 self.conn.execute("""INSERT INTO source_status(source_id,last_checked,last_success,last_error)

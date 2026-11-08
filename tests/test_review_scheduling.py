@@ -41,7 +41,7 @@ def test_schema_three_upgrade_preserves_existing_watch_due(tmp_path):
         db.conn.execute("PRAGMA user_version=3")
     db.close()
     db = Database(path)
-    assert db.schema_version == 5
+    assert db.schema_version == 6
     assert {source: state["next_due"] for source, state in db.source_schedules(row["id"]).items()} == {
         "a": 1_800_000_123.0, "b": 1_800_000_123.0}
     assert db.get_watch(row["id"])["next_due"] == 1_800_000_123.0
@@ -66,7 +66,7 @@ def test_schema_four_migration_rolls_back_on_interrupted_copy(tmp_path, monkeypa
         assert raw.execute("PRAGMA user_version").fetchone()[0] == 3
         assert raw.execute("SELECT name FROM sqlite_master WHERE name='watch_sources'").fetchone() is None
     reopened = Database(path)
-    assert reopened.schema_version == 5
+    assert reopened.schema_version == 6
     reopened.close()
 
 
@@ -84,7 +84,7 @@ def test_schema_three_partial_failure_does_not_inherit_global_backoff(tmp_path, 
         db.conn.execute("PRAGMA user_version=3")
     db.close()
     db = Database(path)
-    assert db.schema_version == 5
+    assert db.schema_version == 6
     assert db.get_watch(row["id"])["next_due"] <= clock[0]
     assert all(state["failure_count"] == 0 and state["next_due"] <= clock[0]
                for state in db.source_schedules(row["id"]).values())

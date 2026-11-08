@@ -91,12 +91,13 @@ def test_legacy_watch_cadence_migrates_without_replacing_due(tmp_path):
         data.pop("source_intervals", None)
         db.conn.execute("UPDATE watches SET data=?,next_due=? WHERE id=?", (json.dumps(data), old_due, row["id"]))
         db.conn.execute("UPDATE watch_sources SET next_due=? WHERE watch_id=?", (old_due, row["id"]))
+        db.conn.execute("ALTER TABLE watch_sources DROP COLUMN pending_refresh")
         db.conn.execute("ALTER TABLE watch_sources DROP COLUMN min_interval_seconds")
         db.conn.execute("PRAGMA user_version=4")
     db.close()
     reopened = Database(path)
     migrated = reopened.get_watch(row["id"])
-    assert reopened.schema_version == 5
+    assert reopened.schema_version == 6
     assert migrated["interval_seconds"] == 1800
     assert migrated["black_friday_interval_seconds"] == 900
     assert migrated["next_due"] == old_due
@@ -108,6 +109,7 @@ def test_schema_five_migration_rolls_back_when_copy_fails(tmp_path, monkeypatch)
     db = Database(path)
     db.create_watch(watch(kind="exact", source_ids=["a"]))
     with db.conn:
+        db.conn.execute("ALTER TABLE watch_sources DROP COLUMN pending_refresh")
         db.conn.execute("ALTER TABLE watch_sources DROP COLUMN min_interval_seconds")
         db.conn.execute("PRAGMA user_version=4")
     db.close()
@@ -120,7 +122,7 @@ def test_schema_five_migration_rolls_back_when_copy_fails(tmp_path, monkeypatch)
         assert raw.execute("PRAGMA user_version").fetchone()[0] == 4
         assert "min_interval_seconds" not in {column[1] for column in raw.execute("PRAGMA table_info(watch_sources)")}
     reopened = Database(path)
-    assert reopened.schema_version == 5
+    assert reopened.schema_version == 6
     reopened.close()
 
 
@@ -171,6 +173,26 @@ def test_black_week_expiry_keeps_failure_backoff_and_error(tmp_path, monkeypatch
     assert db.get_watch(row["id"])["next_due"] == 1_800_000_000.0 + 14400
     assert db.source_schedules(row["id"])["a"]["failure_count"] == 1
     assert "unavailable" in db.get_watch(row["id"])["last_error"]
+    db.close()
+
+
+def test_edited_query_due_survives_black_week_expiry(tmp_path, monkeypatch):
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    db = Database(tmp_path / "edit-expiry.db")
+    original = watch(kind="exact", source_ids=["a"], query="Old")
+    row = db.create_watch(original)
+    db.update_settings({"black_friday_until": clock[0] + 600})
+    db.record_check(row["id"], [], "ok", None, clock[0])
+    clock[0] += 500
+    db.update_watch(row["id"], original.model_copy(update={"query": "New"}))
+    assert db.get_watch(row["id"])["next_due"] == clock[0]
+    clock[0] += 101
+    assert [due["id"] for due in db.due_watches()] == [row["id"]]
+    assert db.get_watch(row["id"])["next_due"] == 1_800_000_500.0
+    db.record_check(row["id"], [], "ok", None, clock[0])
+    assert db.source_schedules(row["id"])["a"]["pending_refresh"] == 0
+    assert db.get_watch(row["id"])["next_due"] == clock[0] + 7200
     db.close()
 
 
