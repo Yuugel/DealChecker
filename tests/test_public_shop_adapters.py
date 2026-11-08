@@ -299,3 +299,106 @@ async def test_direct_link_keeps_current_unconditional_price_with_validity_date(
     watch = WatchInput(name=EXAMPLE, source_ids=["berrybase"], url=BERRY_PRODUCT)
     offer, = await BerryBaseAdapter(pages).lookup(watch)
     assert offer.price_cents == 1990
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [
+    ValueError("Quelle meldet HTTP 404; keine Weiterleitung verfolgt"),
+    ValueError("Quelle meldet HTTP 410; keine Weiterleitung verfolgt"),
+    "<html><h1>Temporarily missing product markup</h1></html>",
+    product_page(ALTERNATE + "/Example/Bad/html/product/234567",
+                 "ALTERNATE GmbH", sku=999999),
+])
+async def test_discovery_preserves_good_offer_when_one_detail_is_bad(broken, caplog):
+    bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+            f'<a class="productBox" title="Example Radio" href="{bad_url}">Old Radio</a>'
+            f'<a class="productBox" title="Example Radio" href="{ALTERNATE_PRODUCT}">Current Radio</a>',
+        bad_url: broken,
+        ALTERNATE_PRODUCT: product_page(
+            ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456,
+            shipping={"shippingDestination": {"addressCountry": "DE"},
+                      "shippingRate": {"currency": "EUR", "value": "7.99"}},
+        ),
+    })
+    watch = WatchInput(name=EXAMPLE, kind="discovery", query=EXAMPLE, source_ids=["alternate"])
+    found = await AlternateAdapter(pages).search(watch)
+    assert len(found) == 1 and found[0].url == ALTERNATE_PRODUCT
+    assert getattr(found, "skipped_pages", 0) == 1
+    assert pages.calls == [ALTERNATE + "/robots.txt",
+                           ALTERNATE + "/listing.xhtml?q=Example+Radio",
+                           bad_url, ALTERNATE_PRODUCT]
+    assert "übersprungen" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_partial_discovery_records_warning_and_alert_without_source_backoff(tmp_path):
+    from dealchecker.db import Database
+    from dealchecker.service import Engine
+
+    bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+            f'<a class="productBox" title="Example Radio" href="{bad_url}">Old Radio</a>'
+            f'<a class="productBox" title="Example Radio" href="{ALTERNATE_PRODUCT}">Current Radio</a>',
+        bad_url: ValueError("Quelle meldet HTTP 404; keine Weiterleitung verfolgt"),
+        ALTERNATE_PRODUCT: product_page(
+            ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456,
+            shipping={"shippingDestination": {"addressCountry": "DE"},
+                      "shippingRate": {"currency": "EUR", "value": "7.99"}},
+        ),
+    })
+    db = Database(tmp_path / "partial.db")
+    saved = db.create_watch(WatchInput(
+        name=EXAMPLE, kind="discovery", query=EXAMPLE, source_ids=["alternate"],
+        target_cents=3000,
+    ))
+    engine = Engine(db, {"alternate": AlternateAdapter(pages)})
+    result = await engine.check_watch(saved["id"])
+    assert result["status"] == "partial" and result["offers"] == 1
+    assert "1 Produktdetailseite(n) ausgelassen" in result["error"]
+    assert len(db.list_events()) == 1
+    assert db.list_offers(saved["id"])[0]["total_cents"] == 2789
+    schedule = db.source_schedules(saved["id"])["alternate"]
+    assert schedule["failure_count"] == 0 and schedule["last_error"] is None
+    assert db.list_checks()[0]["status"] == "partial"
+    await engine.close()
+    db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [403, 429, 503])
+async def test_hostwide_block_never_continues_after_failed_product(status):
+    bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+            f'<a class="productBox" title="Example Radio" href="{bad_url}">Old Radio</a>'
+            f'<a class="productBox" title="Example Radio" href="{ALTERNATE_PRODUCT}">Current Radio</a>',
+        bad_url: ValueError(f"Quelle meldet HTTP {status}; keine Weiterleitung verfolgt"),
+        ALTERNATE_PRODUCT: product_page(ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456),
+    })
+    with pytest.raises(ValueError, match=f"HTTP {status}"):
+        await AlternateAdapter(pages).search(
+            WatchInput(name=EXAMPLE, kind="discovery", query=EXAMPLE, source_ids=["alternate"]))
+    assert ALTERNATE_PRODUCT not in pages.calls
+
+
+@pytest.mark.asyncio
+async def test_exact_missing_page_still_fails_and_all_invalid_discovery_is_not_success():
+    bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+            f'<a class="productBox" title="Example Radio" href="{bad_url}">Gone Radio</a>',
+        bad_url: ValueError("Quelle meldet HTTP 404; keine Weiterleitung verfolgt"),
+    })
+    adapter = AlternateAdapter(pages)
+    with pytest.raises(ValueError, match="nicht mehr verfügbar"):
+        await adapter.lookup(WatchInput(name=EXAMPLE, source_ids=["alternate"], url=bad_url))
+    with pytest.raises(ValueError, match="kein gültiger Treffer"):
+        await adapter.search(WatchInput(name=EXAMPLE, kind="discovery",
+                                        query=EXAMPLE, source_ids=["alternate"]))
