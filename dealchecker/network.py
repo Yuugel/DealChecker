@@ -92,8 +92,9 @@ class SafeHttpClient:
         host = validate_url(url, allowed_hosts)
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
-            wait = self._next.get(host, 0) - time.monotonic()
-            if wait > 0:
+            # Event-loop timers can wake early (notably coarse Windows clocks).
+            # Recheck the deadline while holding the host lock before any I/O.
+            while (wait := self._next.get(host, 0) - time.monotonic()) > 0:
                 await asyncio.sleep(wait)
             self._next[host] = time.monotonic() + self.min_interval
             try:

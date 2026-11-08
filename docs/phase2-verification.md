@@ -4,7 +4,7 @@ Basis: gemergtes MVP `014990068ac41e95e679dad9fc01ad24e299ea54`; Feature-Branch 
 
 ## Automatisierte Prüfungen — synthetische Daten
 
-**167 Tests bestanden** unter Windows/Python 3.14.6. `python -m compileall -q dealchecker`, `python -m pip check`, `node --check dealchecker/static/app.js` und `git diff --check` erfolgreich. Eine bestehende Starlette-Testclient-Deprecation-Warnung bleibt; kein Testfehler.
+**168 Tests bestanden** unter Windows/Python 3.14.6. `python -m compileall -q dealchecker`, `python -m pip check`, `node --check dealchecker/static/app.js` und `git diff --check` erfolgreich. Eine bestehende Starlette-Testclient-Deprecation-Warnung bleibt; kein Testfehler.
 
 Gezielte neue Prüfungen decken ab:
 
@@ -14,6 +14,8 @@ Gezielte neue Prüfungen decken ab:
 - Bestenvergleich-Suche/ID/EAN/URL, Identitätskonflikte, ungültige Preise, Cache und Ausfälle. Vollständiger lokaler API-Pfad: entdecken → exakt übernehmen → Neustart → niedrigerer Referenzpreis wird gespeichert, aber löst keinen Kaufalarm aus.
 - Modula24-Suche → exakte Variante → Neustart → gezielte Produkt-/Versandabfrage ohne erneuten Gesamtkatalog. Ein kontrollierter Preisrückgang löst einen Alarm aus. Unbekannter Versand, falsche Varianten/Währungen und Cachealter werden getestet.
 - Bestehende mehrstündige Pausen, dauerhaft defekte Parallelquellen, Sicherheits-, Persistenz- und Zustelltests bleiben enthalten.
+
+Der erste PR-CI-Lauf fand unter Windows/Python 3.11 einen zu früh aufwachenden Timer im HTTP-Rate-Limiter. Die ursprüngliche einmalige Warteoperation konnte den Mindestabstand unterschreiten. Der Client prüft die monotone Frist jetzt nach jedem Aufwachen erneut unter der Host-Sperre. Eine deterministische Regression reproduzierte den Fehler vor der Korrektur und besteht danach; der Echtzeit-Parallelitätstest bleibt bestehen.
 
 Die GitHub-Workflow-Matrix prüft Windows und Ubuntu jeweils mit Python 3.11 und 3.14; der konkrete Lauf ist am Feature-PR sichtbar. Lokale Tests ersetzen diesen Linux-Lauf nicht.
 
