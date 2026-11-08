@@ -1,4 +1,5 @@
 """Validated wire and adapter models for the price monitor."""
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
@@ -15,16 +16,16 @@ class WatchInput(BaseModel):
     gtin: str = Field(default="", max_length=100)
     model: str = Field(default="", max_length=200)
     variant: str = Field(default="", max_length=200)
-    synonyms: list[str] = Field(default_factory=list, max_length=20)
+    synonyms: list[str] = Field(default_factory=list, max_length=5)
     category: str = Field(default="", max_length=200)
     manufacturer: str = Field(default="", max_length=200)
     exclusions: list[str] = Field(default_factory=list, max_length=20)
     merchants_include: list[str] = Field(default_factory=list, max_length=20)
     merchants_exclude: list[str] = Field(default_factory=list, max_length=20)
-    target_cents: int | None = Field(default=None, ge=0)
-    max_price_cents: int | None = Field(default=None, ge=0)
+    target_cents: int | None = Field(default=None, ge=0, strict=True)
+    max_price_cents: int | None = Field(default=None, ge=0, strict=True)
     priority: Literal["critical", "high", "normal", "low"] = "normal"
-    interval_seconds: int | None = Field(default=None, ge=300, le=86400)
+    interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
     paused: bool = False
 
     @field_validator("name", "query", "product_id", "url", "gtin", "model", "variant", "category", "manufacturer", mode="before")
@@ -48,6 +49,8 @@ class WatchInput(BaseModel):
             raise ValueError("a query or product identity is required")
         if self.kind == "discovery" and not self.query:
             raise ValueError("discovery requires query")
+        if (self.product_id or self.url) and len(self.source_ids) != 1:
+            raise ValueError("product_id and url require exactly one source")
         return self
 
 
@@ -67,11 +70,11 @@ class Offer(BaseModel):
     product_id: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=300)
     url: str = Field(min_length=1, max_length=1000)
-    price_cents: int = Field(ge=0)
-    shipping_cents: int | None = Field(ge=0)
+    price_cents: int = Field(ge=0, strict=True)
+    shipping_cents: int | None = Field(ge=0, strict=True)
     currency: Literal["EUR"] = "EUR"
     availability: Literal["in_stock", "out_of_stock", "unknown"]
-    checked_at: float
+    checked_at: float = Field(allow_inf_nan=False)
     variant: str = ""
     gtin: str = ""
     model: str = ""
@@ -90,4 +93,5 @@ class Offer(BaseModel):
     @computed_field
     @property
     def key(self) -> str:
-        return "\x1f".join((self.source.casefold(), self.product_id.casefold(), self.variant.casefold()))
+        return json.dumps([self.source, self.merchant, self.product_id, self.variant],
+                          ensure_ascii=False, separators=(",", ":"))
