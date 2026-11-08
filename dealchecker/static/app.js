@@ -192,9 +192,9 @@
         priceBox.append(details);
         }
       } else {
-        priceBox.append(el('span', 'current-price', 'Noch kein Angebot'), el('small', 'price-detail', watch.last_error ? 'Letzte Prüfung mit Fehler' : 'Wird nach erster Prüfung angezeigt'));
+        priceBox.append(el('span', 'current-price', 'Noch kein Angebot'), el('small', 'price-detail', watch.last_error ? 'Letzte Prüfung mit Fehler' : watch.last_checked ? 'Letzte Prüfung ohne passende Treffer' : 'Wird nach erster Prüfung angezeigt'));
       }
-      const status = el('span', `offer-state ${offer ? offerState(offer)[0] : 'warn'}`, offer ? offerState(offer)[1] : (watch.paused ? 'Pausiert' : 'Noch nicht geprüft'));
+      const status = el('span', `offer-state ${offer ? offerState(offer)[0] : 'warn'}`, offer ? offerState(offer)[1] : (watch.paused ? 'Pausiert' : watch.last_error ? 'Quellenfehler' : watch.last_checked ? 'Keine passenden Treffer' : 'Noch nicht geprüft'));
       const actions = el('div', 'watch-actions');
       const check = el('button', 'small-action', 'Prüfen'); check.type = 'button'; check.setAttribute('aria-label', `${watch.name}: Jetzt prüfen`); check.disabled = !!watch.running || !!watch.paused || !!data.settings?.paused; check.title = check.disabled ? (watch.paused || data.settings?.paused ? 'Prüfungen sind pausiert' : 'Prüfung läuft bereits') : 'Jetzt manuell prüfen'; check.addEventListener('click', () => manualCheck(watch, check));
       const historyButton = el('button', 'small-action', 'Verlauf'); historyButton.type = 'button'; historyButton.setAttribute('aria-label', `${watch.name}: Preisverlauf anzeigen`); historyButton.disabled = !offer; historyButton.addEventListener('click', () => showHistory(offer, watch));
@@ -335,6 +335,7 @@
       if (event.notification_error) eventDetail += ` · ${event.notification_status === 'sent' ? 'Letzter Benachrichtigungsfehler' : 'Benachrichtigung: erneuter Versuch ausstehend'}${event.notification_attempts ? ` nach ${event.notification_attempts} Versuchen` : ''}: ${event.notification_error}`;
       else if (event.notification_status === 'pending') eventDetail += ' · Benachrichtigung ausstehend';
       else if (event.notification_status === 'sent') eventDetail += ' · Benachrichtigung gesendet';
+      else if (event.notification_status === 'cancelled') eventDetail += ' · Versand wegen geänderter Kanal-Konfiguration verworfen';
       else if (event.notification_status === 'disabled') eventDetail += ' · Benachrichtigungen deaktiviert';
       row.append(el('small', '', eventDetail));
       const link = safeHttpUrl(event.url);
@@ -389,7 +390,7 @@
     const configSource = data.notification_configuration_source || (configured ? 'environment' : 'none');
     byId('setting-notifications').checked = !!settings.notification_enabled;
     byId('setting-notifications').disabled = !configured;
-    byId('notification-status').textContent = configured ? 'Kanal ist konfiguriert; lokale Ereignisse werden unabhängig davon gespeichert.' : 'Kein Benachrichtigungskanal konfiguriert. Der Schalter ist daher nicht verfügbar.';
+    byId('notification-status').textContent = data.notification_configuration_error || (configured ? 'Kanal ist konfiguriert; lokale Ereignisse werden unabhängig davon gespeichert.' : 'Kein Benachrichtigungskanal konfiguriert. Der Schalter ist daher nicht verfügbar.');
     byId('notification-webhook').disabled = configSource === 'environment' || state.notificationConfigBusy;
     byId('notification-config-save').disabled = configSource === 'environment' || state.notificationConfigBusy;
     byId('notification-config-remove').disabled = configSource !== 'local' || state.notificationConfigBusy;

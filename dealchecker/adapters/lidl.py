@@ -14,7 +14,7 @@ from dealchecker.identity import canonical_gtin
 from dealchecker.models import Offer, WatchInput
 
 from .base import Adapter, safe_https_url
-from .public_pages import PublicPageClient, _money, _text, _type, jsonld_documents
+from .public_pages import PublicPageClient, _money, _public_price, _text, _type, jsonld_documents
 
 
 _HOST = "www.lidl.de"
@@ -132,7 +132,7 @@ def _parse_offer(html: str, product_id: str) -> Offer:
         raise ValueError("Lidl liefert keinen Produktnamen")
     brand = product.get("brand")
     brand = _text(brand.get("name")) if isinstance(brand, dict) else _text(brand)
-    price = _money(offer.get("price"))
+    price = _public_price(offer)
     if price <= 0:
         raise ValueError("Lidl liefert keinen gültigen Kaufpreis")
     availability = _AVAILABILITY.get(_type(offer.get("availability")), "unknown")

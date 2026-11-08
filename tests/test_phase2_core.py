@@ -97,7 +97,7 @@ def test_legacy_watch_cadence_migrates_without_replacing_due(tmp_path):
     db.close()
     reopened = Database(path)
     migrated = reopened.get_watch(row["id"])
-    assert reopened.schema_version == 7
+    assert reopened.schema_version == 8
     assert migrated["interval_seconds"] == 1800
     assert migrated["black_friday_interval_seconds"] == 900
     assert migrated["next_due"] == old_due
@@ -122,7 +122,7 @@ def test_schema_five_migration_rolls_back_when_copy_fails(tmp_path, monkeypatch)
         assert raw.execute("PRAGMA user_version").fetchone()[0] == 4
         assert "min_interval_seconds" not in {column[1] for column in raw.execute("PRAGMA table_info(watch_sources)")}
     reopened = Database(path)
-    assert reopened.schema_version == 7
+    assert reopened.schema_version == 8
     reopened.close()
 
 

@@ -8,6 +8,7 @@ import re
 from time import monotonic, time
 
 from dealchecker.models import Offer, WatchInput
+from dealchecker.identity import canonical_gtin, matches_product_term
 from dealchecker.network import validate_url
 
 from .base import Adapter, safe_https_url
@@ -105,7 +106,7 @@ class FeedAdapter(Adapter):
             raise ValueError("Feed-Suche erfordert einen Suchbegriff")
         terms = [term.casefold() for term in [watch.query, *watch.synonyms] if term]
         return [offer for offer in await self._catalog() if any(
-            term in " ".join((offer.name, offer.model, offer.manufacturer, offer.category)).casefold()
+            matches_product_term(offer, term)
             for term in terms
         )]
 
@@ -113,6 +114,9 @@ class FeedAdapter(Adapter):
         if watch.kind != "exact":
             raise ValueError("Feed-Abfrage erfordert eine exakte Produktüberwachung")
         offers = await self._catalog()
+        requested_gtin = canonical_gtin(watch.gtin) if watch.gtin else None
+        if watch.gtin and requested_gtin is None:
+            raise ValueError('GTIN ist ungültig')
         if watch.gtin and offers and all(not offer.gtin for offer in offers):
             raise ValueError("Feed kann GTIN nicht verifizieren")
         if watch.model and offers and all(not offer.model for offer in offers):
@@ -122,7 +126,7 @@ class FeedAdapter(Adapter):
         if watch.product_id:
             matches = [offer for offer in offers if offer.product_id == watch.product_id]
         elif watch.gtin:
-            matches = [offer for offer in offers if offer.gtin == watch.gtin]
+            matches = [offer for offer in offers if canonical_gtin(offer.gtin) == requested_gtin]
         elif watch.model:
             matches = [offer for offer in offers if offer.model.casefold() == watch.model.casefold()]
         elif watch.url:
@@ -145,7 +149,7 @@ class FeedAdapter(Adapter):
         if watch.variant and matches and any(not offer.variant for offer in matches):
             raise ValueError("Feed kann Variante für diesen Treffer nicht verifizieren")
         matches = [offer for offer in matches if
-                (not watch.gtin or offer.gtin == watch.gtin) and
+                (not watch.gtin or canonical_gtin(offer.gtin) == requested_gtin) and
                 (not watch.model or offer.model.casefold() == watch.model.casefold()) and
                 (not watch.variant or offer.variant.casefold() == watch.variant.casefold())]
         if not any((watch.product_id, watch.gtin, watch.model, watch.url)) and len({(o.product_id, o.variant) for o in matches}) > 1:

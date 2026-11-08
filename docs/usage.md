@@ -2,9 +2,11 @@
 
 ## Überwachungen
 
+„Produktlink auflösen“ erkennt unterstützte Händler und zeigt eine überprüfbare Vorschau. „Dieses Produkt beobachten“ übernimmt Quell-ID, Link, EAN, Modell, Variante und Hersteller. Normale Produktaufträge brauchen keine JSON-Dateien oder Terminalbefehle. Nicht unterstützte Händler und mehrdeutige Produktlinks erhalten eine sichtbare Erklärung. „Produktname suchen“ wählt eingerichtete physische Suchquellen vor; Apple bleibt für Apps wählbar, Lidl unterstützt nur Links.
+
 Eine exakte Überwachung prüft ein identifiziertes Produkt. Eine dynamische Suche fragt die gewählten Quellen mit Suchbegriff und Synonymen erneut ab und kann dadurch neue Produkte entdecken. Mehrdeutige exakte Titel werden nicht stillschweigend einem ähnlichen Produkt zugeordnet. „Exakt beobachten“ an einem Treffer übernimmt dessen Quell-ID und URL in einen neuen Auftrag; die breite Suchanfrage wird dabei entfernt.
 
-App-ID und Produkt-URL sind quellenspezifisch. EAN/GTIN, Modell und Variante können nur genutzt werden, wenn die Quelle sie liefert. Ein nicht unterstütztes Identitätsfeld führt zu einem sichtbaren Fehler. Quellenauswahl und Händlerfilter sind getrennt: Ein Feed kann mehrere Händler enthalten. Hersteller-, Kategorie- und Textfilter benötigen passende Quelldaten; eine unbekannte Angabe erfüllt den Filter nicht.
+App-ID und Produkt-URL sind quellenspezifisch. EAN/GTIN, Modell und Variante können nur genutzt werden, wenn die Quelle sie liefert. Ein nicht unterstütztes Identitätsfeld führt zu einem sichtbaren Fehler. Quellenauswahl, Händlerfilter und Verkäuferfilter sind getrennt: Ein Feed kann mehrere Händler enthalten. Hersteller-, Kategorie- und Textfilter benötigen passende Quelldaten; eine unbekannte Angabe erfüllt den Filter nicht.
 
 Die Preisobergrenze beschränkt Discovery-Ergebnisse. Der Wunschpreis steuert Alarme. Beide beziehen sich auf bekannte Gesamtpreise. Gutscheine und Grundpreise werden als Hinweise angezeigt; unbekannte Gutscheinbedingungen werden nicht automatisch vom Preis abgezogen. Unterschiedliche Packungsgrößen/Varianten werden nicht ohne belegte Identität miteinander verglichen.
 
@@ -12,7 +14,7 @@ Die Preisobergrenze beschränkt Discovery-Ergebnisse. Der Wunschpreis steuert Al
 
 Verkäufer, Variante, Packungsgröße und Zustand werden in der Angebotsidentität getrennt gespeichert. Ein aktueller Händlervergleich erscheint nur bei mindestens zwei verschiedenen Händlern, frischen lieferbaren Einzelangeboten und bekannten Gesamtpreisen. Gruppiert wird über eine prüfziffergültige GTIN oder vollständig belegte Hersteller-/Modell-/Varianten-/Packungsangaben. Unterschiede und fehlende Merkmale können bewusst getrennte Gruppen ergeben; ähnliche Namen allein reichen nie. Die Vergleichsgruppe verändert die historische Alarmbewertung nicht.
 
-Bestenvergleich liefert **Preisreferenzen**, keine bestätigten Händlerangebote. Referenzen haben weder bekannten Versand noch belastbaren Bestand; ihr Verlauf zeigt ausdrücklich den Artikelreferenzpreis. Sie lösen keine Kaufpreisalarme aus und nehmen nicht am Gesamtpreisvergleich teil. Ein gesetztes Preislimit filtert sie aus, weil der Gesamtpreis unbekannt ist. [Quellenbeschreibung](bestenvergleich-source.md).
+Bestenvergleich liefert **Preisreferenzen**, keine bestätigten Händlerangebote. Referenzen haben weder bekannten Versand noch belastbaren Bestand; ihr Verlauf zeigt ausdrücklich den Artikelreferenzpreis. Sie lösen keine Kaufpreisalarme aus und nehmen nicht am Gesamtpreisvergleich teil. Ein gesetztes Gesamtpreislimit filtert sie aus, weil der Gesamtpreis unbekannt ist. Mit dem separaten „Referenzbudget“ können Artikelreferenzen dennoch bis zu diesem Betrag angezeigt werden; sie erzeugen weiterhin keine Kaufalarme. [Quellenbeschreibung](bestenvergleich-source.md).
 
 ## Bewertung
 
@@ -34,10 +36,10 @@ Nach einem Alarm wird dasselbe Angebot nur bei einer weiteren relevanten Verbess
 | Breite Suche, jede Priorität | 8 Stunden | 3 Stunden |
 | Exakt · Kritisch | 30 Minuten | 5 Minuten |
 | Exakt · Hoch | 45 Minuten | 10 Minuten |
-| Exakt · Normal | 2 Stunden | 30 Minuten |
+| Exakt · Normal | 7 Stunden | 45 Minuten |
 | Exakt · Niedrig | 8 Stunden | 1 Stunde |
 
-Eigene Normal- und Black-Week-Intervalle zwischen 5 Minuten und 24 Stunden sind möglich. Quellenspezifische Paare haben Vorrang vor Auftragswerten; beide Werte angeben oder beide leer lassen. Das strengere Quellenminimum gilt immer: Modula24/Apple 5 Minuten, Bestenvergleich 20 Minuten. Die Oberfläche zeigt die wirksamen Intervalle je Quelle.
+Eigene Normal- und Black-Week-Intervalle zwischen 5 Minuten und 24 Stunden sind möglich. Quellenspezifische Paare haben Vorrang vor Auftragswerten; beide Werte angeben oder beide leer lassen. Das strengere Quellenminimum gilt immer: Modula24/Apple 5 Minuten, Bestenvergleich 20 Minuten, ALTERNATE/BerryBase/Lidl 30 Minuten. Strengere aktuelle robots-Crawl-delays gelten zusätzlich. Die Oberfläche zeigt die wirksamen Intervalle je Quelle.
 
 Beim Upgrade behalten vorhandene Aufträge den vorherigen Normal-/Black-Friday-Takt als explizite Werte. Für die neuen automatischen Standards diese Felder leeren. Black Friday lässt sich für 24 Stunden oder 7 Tage aktivieren und endet automatisch. Beim Wechsel werden gesunde Quellen neu terminiert; bestehende Fehlerfristen werden nicht abgekürzt. Beispielwerte für später freigeschaltete Quellen wären Amazon 2 Stunden/20 Minuten und MediaMarkt/Saturn 7 Stunden/45 Minuten. Diese Beispiele bedeuten **keine vorhandenen Händleradapter**.
 
@@ -49,9 +51,9 @@ Fehler-Backoff gilt getrennt je Quelle und Überwachung. Fällt eine Quelle daue
 
 ## Discord
 
-Webhook in Discord erstellen, dann `DEALCHECKER_DISCORD_WEBHOOK` in der Umgebung des gestarteten Prozesses setzen. Keine Webhook-Adresse in Git-Dateien ablegen. Danach in DealChecker Benachrichtigungen aktivieren. Es werden neue Ereignisse ab Aktivierung versendet; vorherige lokale Ereignisse werden nicht massenhaft nachgesendet.
+Webhook in Discord erstellen und unter **Einstellungen → Benachrichtigungen → Webhook-Adresse** eintragen. „Webhook lokal speichern“ sendet keine Testnachricht und aktiviert Meldungen nicht. Danach den Schalter aktivieren. Die Adresse wird nie wieder angezeigt; eine neue Eingabe ersetzt sie, „Lokale Konfiguration entfernen“ löscht sie und deaktiviert Meldungen. Alternativ setzt `DEALCHECKER_DISCORD_WEBHOOK` die Adresse über die Prozessumgebung; diese Konfiguration lässt sich in der Oberfläche nicht überschreiben. Fehlerhafte lokale Konfiguration stoppt die Preisüberwachung nicht, sondern deaktiviert den Versand und zeigt einen Fehler. Die Datei `notifications.json` im Datenordner ist nicht verschlüsselt; einen nur für den Benutzer zugänglichen Ordner verwenden und Backups schützen. Keine Webhook-Adresse in Git-Dateien ablegen. Es werden neue Ereignisse ab Aktivierung versendet; vorherige lokale Ereignisse werden nicht massenhaft nachgesendet.
 
-Zustellfehler werden mit Retry-Status angezeigt. Ein Absturz exakt nach erfolgreichem Versand, aber vor der lokalen Bestätigung kann eine erneute Zustellung verursachen: Webhooks garantieren hier **mindestens einmal**, nicht exakt einmal. Der Preisalarm selbst wird dauerhaft dedupliziert. Es werden niemals automatische Käufe ausgelöst.
+Zustellfehler werden mit Retry-Status angezeigt. Beim Entfernen oder Wechseln des Kanals werden ausstehende Zustellungen für den alten Kanal verworfen; lokale Ereignisse bleiben erhalten. Das gilt auch für einen Umgebungswechsel beim Neustart. Beim ersten Upgrade auf die Kanalbindung (Schema 8) werden alte ausstehende Zustellungen ohne belegtes Ziel vorsichtshalber verworfen. Ein Absturz exakt nach erfolgreichem Versand, aber vor der lokalen Bestätigung kann eine erneute Zustellung verursachen: Webhooks garantieren hier **mindestens einmal**, nicht exakt einmal. Der Preisalarm selbst wird dauerhaft dedupliziert. Es werden niemals automatische Käufe ausgelöst.
 
 ## Optionaler Windows-Autostart
 

@@ -1,5 +1,9 @@
 # Datenquellen (Stand: 8. November 2026)
 
+## Neu: ALTERNATE, BerryBase und Lidl
+
+ALTERNATE und BerryBase unterstützen öffentliche Produktsuche und gezielte Produktlinks; Lidl unterstützt eindeutige Produktlinks ohne freie Suche. Elektronik, Controller, Haushaltsgeräte, Küchenartikel und Werkzeuge wurden mit echten Produkten geprüft. Mindestcache 30 Minuten; aktuelle robots-Regeln, Preisbedingungen und Versandnachweise bleiben verbindlich. BerryBase-Versand bleibt derzeit unbekannt, Lidl unterstützt nicht jede Variantenfamilie. [Zugänge, Richtlinien und Grenzen](phase3-sources.md) · [Reale Einkaufsprüfungen](phase3-verification.md).
+
 ## Sofort nutzbar: Modula24, physische Möbelteile
 
 Modula24 erlaubt in seiner [eigenen API-Dokumentation](https://modula24.com/pages/api) kostenlose, lesende Zugriffe ohne Anmeldung und nennt Preisvergleiche als Anwendungsfall. Der Standardadapter durchsucht den [deutschen JSON-Produktkatalog](https://modula24.com/feeds/products.de.json) und prüft ausgewählte Varianten gezielt über die dokumentierte Produkt-JSON-Schnittstelle samt lesender DE-Versandabfrage. Nur bei einer reinen, noch nicht aufgelösten Varianten-ID wird einmal der Katalog benötigt. Es werden keine Shopseiten ausgelesen. Ein Zugangsschlüssel, eine kostenpflichtige API oder eine Partnerschaft sind für diesen dokumentierten Zugang nicht erforderlich.

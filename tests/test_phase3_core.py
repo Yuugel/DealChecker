@@ -87,6 +87,25 @@ def test_discovery_words_and_canonical_gtin_are_verified():
     assert not _matches(watch(query='8BitDo',gtin='5901234123457'),offer())
 
 
+def test_discovery_explicit_model_and_variant_reject_accessories_and_other_variants():
+    assert _matches(watch(model='Ultimate 2C', variant='Blue'), offer(variant='Blue'))
+    assert not _matches(watch(model='Ultimate 2C'), offer(model='Ultimate 2C case'))
+    assert not _matches(watch(variant='Blue'), offer(variant='Pink'))
+    with pytest.raises(ValueError, match='requested model'):
+        _matches(watch(model='Ultimate 2C'), offer(model=''))
+
+
+async def test_authorized_feed_preselection_accepts_canonical_gtin_and_reordered_words():
+    from dealchecker.adapters.feed import FeedAdapter
+    row=offer().model_dump(exclude={'source','checked_at','quality','provenance','key','total_cents'})
+    class Catalog:
+        async def get_json(self,*args,**kwargs): return {'offers':[row]}
+    adapter=FeedAdapter(Catalog(),{'id':'shop','name':'Synthetic shop','url':'https://example.com/catalog'})
+    assert len(await adapter.lookup(watch(kind='exact',gtin='04006381333931'))) == 1
+    assert len(await adapter.search(watch(query='2C 8BitDo Ultimate'))) == 1
+    assert len(await adapter.search(watch(query='4006381333931'))) == 1
+
+
 def test_migration_preserves_phase2_cadence_and_new_fields(tmp_path):
     path=tmp_path/'db.sqlite'
     db=Database(path)

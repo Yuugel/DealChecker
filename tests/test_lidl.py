@@ -125,6 +125,8 @@ async def test_repeated_checks_reuse_recent_observation():
     page(product_fields={"gtin13": ["4006381333931", "4052916875346"]}),
     page(extra_offers=[{"@type": "Offer", "price": 39.99}]),
     page(offer_fields={"validForMemberTier": {"name": "Lidl Plus"}}),
+    page(offer_fields={"eligibleQuantity": {"minValue": 2}}),
+    page(offer_fields={"priceValidUntil": "2000-01-01"}),
     page(offer_fields={"seller": {"name": "Beispielhändler"}}),
 ])
 async def test_unsafe_identity_or_offer_is_rejected(html):

@@ -1,12 +1,11 @@
 """Bounded, single-flight watch checks and observed-price evaluation."""
 import asyncio
-import re
 import statistics
 import time
 
 from .db import Database, FEED_FRESH_SECONDS, interval
 from .models import Offer, WatchInput
-from .identity import canonical_gtin
+from .identity import canonical_gtin, matches_product_term
 
 SOURCE_CHECK_TIMEOUT = 60
 
@@ -22,26 +21,23 @@ def _matches(watch: WatchInput, offer: Offer) -> bool:
             raise ValueError('source does not provide requested gtin')
         if expected_gtin is None or canonical_gtin(offer.gtin) != expected_gtin:
             return False
+    for field in ("model", "variant"):
+        expected = getattr(watch, field)
+        actual = getattr(offer, field)
+        if expected:
+            if not actual:
+                raise ValueError(f"source does not provide requested {field}")
+            if actual.casefold() != expected.casefold():
+                return False
     if watch.kind == "exact":
         if watch.product_id and offer.product_id.casefold() != watch.product_id.casefold():
             return False
-        for field in ("model", "variant"):
-            expected = getattr(watch, field)
-            actual = getattr(offer, field)
-            if expected:
-                if not actual:
-                    raise ValueError(f"source does not provide requested {field}")
-                if actual.casefold() != expected.casefold():
-                    return False
         if not any((watch.product_id, watch.url, watch.gtin, watch.model, watch.variant)) and watch.query:
             if offer.name.casefold() != watch.query.casefold():
                 return False
     else:
         terms = [watch.query, *watch.synonyms]
-        tokens = set(re.findall(r'\w+', ' '.join((offer.name, offer.model, offer.manufacturer, offer.category, offer.variant)).casefold()))
-        if not any((canonical_gtin(t) is not None and canonical_gtin(t) == canonical_gtin(offer.gtin))
-                   or (bool(re.findall(r'\w+', t)) and set(re.findall(r'\w+', t.casefold())).issubset(tokens))
-                   for t in terms):
+        if not any(matches_product_term(offer, t) for t in terms):
             return False
     if watch.manufacturer and not _contains(offer.manufacturer, watch.manufacturer):
         return False
@@ -233,9 +229,9 @@ class Engine:
         return {"status": status, "offers": len(observations), "error": error}
 
     async def flush_outbox(self):
-        if not self.notifier or not self.db.get_settings()["notification_enabled"]:
-            return
         async with self._delivery_lock:
+            if not self.notifier or not self.db.get_settings()["notification_enabled"]:
+                return
             for event in self.db.due_outbox(limit=1):
                 try:
                     await asyncio.wait_for(self.notifier.send(event), timeout=15)
