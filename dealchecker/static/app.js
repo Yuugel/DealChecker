@@ -455,7 +455,7 @@
   }
   async function showHistory(offer, watch) {
     const historyDialog = byId('history-dialog');
-    byId('history-title').textContent = `Preisverlauf · ${watch.name || offer.name || 'Produkt'}`;
+    byId('history-title').textContent = `Preisverlauf · ${offer.name || watch.name || 'Produkt'}`;
     byId('history-subtitle').textContent = `${offer.merchant || offer.source || 'Quelle'} · Gesamtpreis nur bei bekanntem Versand`;
     const rows = byId('history-rows'); rows.replaceChildren();
     byId('history-chart').replaceChildren();
