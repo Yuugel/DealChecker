@@ -93,6 +93,12 @@
     } catch { /* invalid product URL: render as unavailable */ }
     return null;
   }
+  function safeHttpsUrl(raw) {
+    const safe = safeHttpUrl(raw);
+    if (!safe) return null;
+    try { return new URL(safe).protocol === 'https:' ? safe : null; }
+    catch { return null; }
+  }
   function offerState(offer) {
     if (isReferenceOffer(offer)) return ['warn', 'Referenzpreis · kein Händlerangebot'];
     const evaluation = String(offer?.evaluation || 'Unzureichende Daten');
@@ -414,6 +420,7 @@
     byId('watch-category').value = ''; byId('watch-manufacturer').value = '';
     byId('watch-synonyms').value = ''; byId('watch-exclusions').value = '';
     byId('watch-merchants-include').value = ''; byId('watch-merchants-exclude').value = '';
+    byId('watch-sellers-include').value = ''; byId('watch-sellers-exclude').value = '';
     byId('watch-bf-interval').value = '';
     state.sourceIntervalDraft = {};
     byId('watch-form-error').textContent = '';
@@ -427,8 +434,6 @@
     }
     for (const source of available) {
       const label = el('label', 'source-check');
-      const discovery = $('input[name="watch-kind"][value="discovery"]')?.checked;
-      if (discovery && source.supports_search === false && !selected.includes(source.id)) continue;
       const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = source.configured === false && !selected.includes(source.id);
       input.addEventListener('change', () => renderSourceIntervalOptions());
       label.append(input, document.createTextNode(`${source.name || source.id}${source.supports_search === false ? ' · nur Link' : ''}`)); root.append(label);
@@ -478,8 +483,10 @@
       byId('watch-manufacturer').value = watch.manufacturer || '';
       byId('watch-synonyms').value = (watch.synonyms || []).join(', ');
       byId('watch-exclusions').value = (watch.exclusions || []).join(', ');
-      byId('watch-merchants-include').value = (watch.sellers_include || watch.merchants_include || []).join(', ');
-      byId('watch-merchants-exclude').value = (watch.sellers_exclude || watch.merchants_exclude || []).join(', ');
+      byId('watch-merchants-include').value = (watch.merchants_include ?? []).join(', ');
+      byId('watch-merchants-exclude').value = (watch.merchants_exclude ?? []).join(', ');
+      byId('watch-sellers-include').value = (watch.sellers_include ?? []).join(', ');
+      byId('watch-sellers-exclude').value = (watch.sellers_exclude ?? []).join(', ');
       byId('watch-target').value = watch.target_cents == null ? '' : (watch.target_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-max').value = watch.max_price_cents == null ? '' : (watch.max_price_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-reference-max').value = watch.reference_max_price_cents == null ? '' : (watch.reference_max_price_cents / 100).toFixed(2).replace('.', ',');
@@ -543,7 +550,8 @@
       product_id: byId('watch-product-id').value.trim(), url,
       gtin: byId('watch-gtin').value.trim(), model: byId('watch-model').value.trim(), variant: byId('watch-variant').value.trim(),
       synonyms: splitList(byId('watch-synonyms').value, 5), category: byId('watch-category').value.trim(), manufacturer: byId('watch-manufacturer').value.trim(),
-      exclusions: splitList(byId('watch-exclusions').value), sellers_include: splitList(byId('watch-merchants-include').value), sellers_exclude: splitList(byId('watch-merchants-exclude').value),
+      exclusions: splitList(byId('watch-exclusions').value), merchants_include: splitList(byId('watch-merchants-include').value), merchants_exclude: splitList(byId('watch-merchants-exclude').value),
+      sellers_include: splitList(byId('watch-sellers-include').value), sellers_exclude: splitList(byId('watch-sellers-exclude').value),
       target_cents: target, max_price_cents: max, reference_max_price_cents: referenceMax,
       priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
       source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
@@ -555,7 +563,7 @@
     byId('watch-query').value = query;
     const discovery = $('input[name="watch-kind"][value="discovery"]');
     if (discovery) discovery.checked = true;
-    const sources = (state.data?.sources || []).filter(source => source.configured !== false && source.supports_search === true).map(source => source.id);
+    const sources = (state.data?.sources || []).filter(source => source.configured !== false && source.supports_search === true && source.id !== 'apple').map(source => source.id);
     buildSourceOptions(state.data?.sources || [], sources);
     if (!sources.length) byId('watch-form-error').textContent = 'Der Dienst meldet derzeit keine eingerichteten Suchquellen.';
   }
@@ -568,17 +576,23 @@
     offers.forEach(offer => {
       const card = el('article', 'resolve-card');
       const title = el('strong', '', offer.name || 'Unbenanntes Produkt');
-      const meta = el('small', '', [offer.seller || offer.merchant || 'Händler unbekannt', offer.price_cents == null ? 'Artikelpreis unbekannt' : fmtMoney(offer.price_cents, offer.currency), offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`].join(' · '));
+      const isReference = offer.offer_type === 'reference' || offer.provenance === 'reference';
+      const total = Number.isInteger(offer.price_cents) && Number.isInteger(offer.shipping_cents) ? offer.price_cents + offer.shipping_cents : null;
+      const availability = ({ in_stock: 'Auf Lager', out_of_stock: 'Nicht auf Lager', unknown: 'Verfügbarkeit unbekannt' })[offer.availability] || 'Verfügbarkeit unbekannt';
+      const meta = el('small', '', [isReference ? 'Referenzpreis · kein Händlerangebot' : (offer.seller || offer.merchant || 'Händler unbekannt'), offer.price_cents == null ? 'Artikelpreis unbekannt' : `${fmtMoney(offer.price_cents, offer.currency)} Artikel`, isReference ? 'Versand unbekannt' : offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`, total == null || isReference ? 'Gesamt unbekannt' : `Gesamt ${fmtMoney(total, offer.currency)}`, availability, offer.gtin ? `GTIN ${offer.gtin}` : '', offer.model ? `Modell ${offer.model}` : '', offer.variant ? `Variante ${offer.variant}` : ''].filter(Boolean).join(' · '));
       const choose = el('button', 'button button-primary', 'Dieses Produkt beobachten'); choose.type = 'button';
       choose.addEventListener('click', () => { resolveDialog.close(); openWatchEditor(null, { ...offer, source: offer.source || result.source_id, url: offer.url || byId('quick-url').value.trim() }); });
-      card.append(title, meta, choose); root.append(card);
+      card.append(title, meta, choose);
+      const offerUrl = safeHttpsUrl(offer.url || byId('quick-url').value.trim());
+      if (offerUrl) { const link = el('a', 'resolve-link', 'Produktseite öffnen ↗'); link.href = offerUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; card.append(link); }
+      root.append(card);
     });
     resolveDialog.showModal();
   }
   async function resolveProductUrl(event) {
     event.preventDefault();
     const url = byId('quick-url').value.trim();
-    if (!url || !safeHttpUrl(url)) { toast('Bitte einen gültigen HTTP- oder HTTPS-Produktlink eingeben.', 'error'); return; }
+    if (!url || !safeHttpUrl(url) || new URL(url).protocol !== 'https:') { toast('Bitte einen gültigen HTTPS-Produktlink eingeben.', 'error'); return; }
     const button = $('#quick-url-form button'); button.disabled = true;
     try { renderResolvedOffers(await api('/links/resolve', { method: 'POST', body: { url } })); }
     catch (error) { toast(error.message, 'error'); }
@@ -700,7 +714,12 @@
     byId('new-watch-button-secondary').addEventListener('click', () => openWatchEditor());
     $$('.close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog')?.close()));
     [dialog, resolveDialog, byId('history-dialog')].forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) modal.close(); }));
-    $$('input[name="watch-kind"]').forEach(input => input.addEventListener('change', () => buildSourceOptions(state.data?.sources || [], $$('input[name="watch-source"]:checked').map(item => item.value))));
+    $$('input[name="watch-kind"]').forEach(input => input.addEventListener('change', () => {
+      const selected = $$('input[name="watch-source"]:checked').map(item => item.value);
+      const discovery = $('input[name="watch-kind"][value="discovery"]')?.checked;
+      const sources = state.data?.sources || [];
+      buildSourceOptions(sources, discovery ? selected.filter(id => sources.find(source => source.id === id)?.supports_search !== false) : selected);
+    }));
     byId('watch-search').addEventListener('input', event => { state.search = event.target.value; if (state.data) renderWatchList(state.data); });
     byId('refresh-button').addEventListener('click', () => refresh(true));
     byId('activity-refresh').addEventListener('click', () => refresh(true));

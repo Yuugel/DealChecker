@@ -43,7 +43,7 @@
       <section class="quick-add" aria-label="Produkt schnell hinzufügen">
         <div><strong>Schnell hinzufügen</strong><small>Produktname für passende Treffer oder Produktlink zur direkten Auflösung.</small></div>
         <form id="quick-name-form" class="quick-add-form"><label class="sr-only" for="quick-name">Produktname suchen</label><input id="quick-name" maxlength="160" placeholder="Produktname …"><button class="button button-secondary" type="submit">Treffer suchen</button></form>
-        <form id="quick-url-form" class="quick-add-form"><label class="sr-only" for="quick-url">Produktlink auflösen</label><input id="quick-url" type="url" maxlength="2048" placeholder="Produktlink einfügen …"><button class="button button-primary" type="submit">Link prüfen</button></form>
+        <form id="quick-url-form" class="quick-add-form"><label class="sr-only" for="quick-url">Produktlink auflösen</label><input id="quick-url" type="url" maxlength="2048" placeholder="HTTPS-Produktlink einfügen …"><button class="button button-primary" type="submit">Link prüfen</button><small class="quick-url-help">Nur HTTPS-Produktlinks</small></form>
       </section>
 
       <section class="coverage-banner" aria-label="Quellenabdeckung">
@@ -95,7 +95,7 @@
           <label class="field field-wide">Anzeigename <span class="required-mark">*</span><input id="watch-name" required maxlength="160" autocomplete="off" placeholder="z. B. Monument Valley"></label>
           <fieldset class="field field-wide kind-choice"><legend>Suchmodus</legend><label><input type="radio" name="watch-kind" value="exact" checked> Exakt <small>Ein eindeutig bestimmtes Produkt</small></label><label><input type="radio" name="watch-kind" value="discovery"> Entdecken <small>Passende Treffer zur Suchanfrage</small></label></fieldset>
           <label class="field field-wide">Suchanfrage<input id="watch-query" maxlength="300" placeholder="Titel oder Suchbegriffe"></label>
-          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Apple ist standardmäßig ausgewählt. Für breitere Elektronik- und Haushaltskategorien Bestenvergleich auswählen; dies liefert Referenzpreise ohne Händler- oder Versandangabe. Modula24 deckt Möbelteile und Zubehör ab.</small></fieldset>
+          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Exakt startet mit Apple. Entdecken startet mit eingerichteten Suchquellen; Link-only Quellen wie Apple können bei Bedarf manuell ausgewählt werden. Bestenvergleich liefert Referenzpreise ohne Händler- oder Versandangabe. Modula24 deckt Möbelteile und Zubehör ab.</small></fieldset>
           <label class="field">Produkt-ID<input id="watch-product-id" maxlength="160" placeholder="Track ID oder Quell-ID"></label>
           <label class="field">Produkt-URL<input id="watch-url" type="url" maxlength="2048" placeholder="App-Store- oder Modula24-Produktlink"></label>
           <label class="field">GTIN / EAN<input id="watch-gtin" maxlength="32" inputmode="numeric"></label>
@@ -105,8 +105,10 @@
           <label class="field">Hersteller<input id="watch-manufacturer" maxlength="120"></label>
           <label class="field field-wide">Synonyme <small>Kommagetrennt · gelten zusätzlich zur Suchanfrage</small><textarea id="watch-synonyms" rows="2" maxlength="1000"></textarea></label>
           <label class="field field-wide">Ausschließen <small>Kommagetrennte Begriffe</small><textarea id="watch-exclusions" rows="2" maxlength="1000"></textarea></label>
-          <label class="field">Verkäufer einschließen <small>Kommagetrennt</small><textarea id="watch-merchants-include" rows="2" maxlength="1000"></textarea></label>
-          <label class="field">Verkäufer ausschließen <small>Kommagetrennt</small><textarea id="watch-merchants-exclude" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Händler einschließen <small>Kommagetrennt</small><textarea id="watch-merchants-include" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Händler ausschließen <small>Kommagetrennt</small><textarea id="watch-merchants-exclude" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Verkäufer einschließen <small>Kommagetrennt</small><textarea id="watch-sellers-include" rows="2" maxlength="1000"></textarea></label>
+          <label class="field">Verkäufer ausschließen <small>Kommagetrennt</small><textarea id="watch-sellers-exclude" rows="2" maxlength="1000"></textarea></label>
           <label class="field">Referenzbudget in EUR<input id="watch-reference-max" inputmode="decimal" placeholder="z. B. 250,00"><small>Vergleicht nur den Artikelpreis mit Referenzen; löst keinen Kaufalarm aus.</small></label>
           <label class="field">Wunschpreis in EUR<input id="watch-target" inputmode="decimal" placeholder="z. B. 4,99"></label>
           <label class="field">Preislimit in EUR<input id="watch-max" inputmode="decimal" placeholder="z. B. 9,99"><small>Gilt für Gesamtpreise von Händlerangeboten. Referenzpreise separat über das Referenzbudget.</small></label>
