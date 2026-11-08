@@ -311,6 +311,12 @@ def _ebay_condition(value: object) -> str:
 def _ebay_stock(item: dict) -> str:
     if item.get("listing_status") in {"ended", "sold", "expired"}:
         return "out_of_stock"
+    quantity = item.get('quantity_available')
+    if quantity is not None:
+        if type(quantity) is not int:
+            return 'unknown'
+        if quantity <= 0:
+            return 'out_of_stock'
     end = item.get("end_time")
     if end is not None:
         try:

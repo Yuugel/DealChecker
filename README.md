@@ -2,7 +2,7 @@
 
 Lokale Preisüberwachung mit echter Produktsuche, nachvollziehbaren Preisverläufen und optionalen Discord-Alarmen. Python, SQLite und eine deutsche Weboberfläche; kein Cloudkonto und keine KI erforderlich.
 
-**Tatsächliche Abdeckung:** **ALTERNATE** und **BerryBase** bieten Produktsuche und gezielte Produktlinks; **MediaMarkt** bietet Suche und Direktabruf, **Saturn** Direktabruf. **Lidl DE** überwacht eindeutige Produktlinks, ohne freie Suche. **Modula24** deckt Möbelteile ab, **Apple App Store DE** App-Kaufpreise. **Bestenvergleich** liefert Preisreferenzen ohne bestätigten Händler/Versand/Bestand und löst keine Kaufpreisalarme aus. Amazon und eBay können optional über ReefAPI abgefragt werden und benötigen einen eigenen ReefAPI-Schlüssel; Galaxus ist in Arbeit. Händlerbedingungen gelten weiterhin. OTTO und Kaufland sind nicht integriert. [Aktuelle Quellen und Grenzen](docs/phase3-sources.md) · [Echte Einkaufsprüfungen](docs/phase3-verification.md) · [Awin/Tradedoubler für private Nutzung](docs/partner-access.md).
+**Tatsächliche Abdeckung:** **ALTERNATE** und **BerryBase** bieten Produktsuche und gezielte Produktlinks; **MediaMarkt** bietet Suche und Direktabruf, **Saturn** Direktabruf. **Lidl DE** überwacht eindeutige Produktlinks, ohne freie Suche. **Modula24** deckt Möbelteile ab, **Apple App Store DE** App-Kaufpreise. **Bestenvergleich** liefert Preisreferenzen ohne bestätigten Händler/Versand/Bestand und löst keine Kaufpreisalarme aus. Amazon, eBay und Galaxus können optional über ReefAPI abgefragt werden und benötigen einen eigenen ReefAPI-Schlüssel. Händlerbedingungen gelten weiterhin. OTTO und Kaufland sind nicht integriert. [Aktuelle Quellen und Grenzen](docs/phase3-sources.md) · [Echte Einkaufsprüfungen](docs/major-retailers-verification.md) · [Awin/Tradedoubler für private Nutzung](docs/partner-access.md).
 
 ## Windows: starten
 
@@ -59,7 +59,7 @@ Umgebungsvariablen vor dem Start setzen:
 
 Zugangsdaten gehören weder ins Repository noch in Screenshots oder Fehlermeldungen. Der Webhook kann unter Einstellungen lokal hinterlegt werden; eine Prozessvariable hat Vorrang. Die API gibt das Geheimnis nicht zurück. Die Datei `notifications.json` im Datenordner ist nicht verschlüsselt: einen eigenen, nur für den Benutzer zugänglichen Datenordner verwenden und Backups schützen. Es gibt keinen verpflichtenden externen Dienst. Der Testlauf versendet keine echten Discord-Nachrichten.
 
-[Bedienung und Alarmregeln](docs/usage.md) · [Adapter entwickeln](docs/adapters.md) · [Aktuelle Tests und Prüfgrenzen](docs/phase3-verification.md) · [Architektur](docs/superpowers/specs/2026-11-08-mvp-design.md)
+[Bedienung und Alarmregeln](docs/usage.md) · [Adapter entwickeln](docs/adapters.md) · [Aktuelle Tests und Prüfgrenzen](docs/major-retailers-verification.md) · [Architektur](docs/superpowers/specs/2026-11-08-mvp-design.md)
 
 ## Linux / Raspberry Pi
 
@@ -79,4 +79,4 @@ Keine Windows-spezifische Datenbank oder Browserabhängigkeit. Ein späterer sys
 .\.venv\Scripts\python.exe -m compileall -q dealchecker
 ```
 
-Die normalen Tests arbeiten ausschließlich mit deutlich gekennzeichneten synthetischen Antworten. Live-Prüfungen erfolgen separat und werden im [aktuellen Prüfbericht](docs/phase3-verification.md) dokumentiert; der [frühere Prüfstand](docs/verification.md) bleibt erhalten.
+Die normalen Tests arbeiten ausschließlich mit deutlich gekennzeichneten synthetischen Antworten. Live-Prüfungen erfolgen separat und werden im [aktuellen Prüfbericht](docs/major-retailers-verification.md) dokumentiert; der [frühere Prüfstand](docs/verification.md) bleibt erhalten.

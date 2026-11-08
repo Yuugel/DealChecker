@@ -288,3 +288,25 @@ async def test_ebay_quantity_does_not_override_auction_signals(auction_evidence)
     watch = WatchInput(name="Example Gamepad", url=EBAY_LINK, source_ids=["ebay"])
     with pytest.raises(ValueError, match="Sofortkauf"):
         await adapter.lookup(watch)
+
+
+@pytest.mark.parametrize('quantity', [0, -1, '0', True])
+async def test_ebay_empty_or_unconfirmed_quantity_never_triggers_purchase_alarm(tmp_path, quantity):
+    from dealchecker.adapters.reef import EbayReefAdapter
+    from dealchecker.db import Database
+    from dealchecker.service import Engine
+    item = listing(quantity_available=quantity, in_stock=True, availability='InStock', listing_status='active')
+    settings = Settings()
+    settings.delivery_postcode = '10115'
+    adapter = EbayReefAdapter(ReefGateway(Pages({EBAY_DETAIL: {'item': item}}), settings))
+    db = Database(tmp_path / 'stock.sqlite3')
+    engine = Engine(db, {'ebay': adapter})
+    try:
+        watch = db.create_watch(WatchInput(name='Synthetic stock contradiction', url=EBAY_LINK,
+                                          source_ids=['ebay'], target_cents=10000))
+        assert (await engine.check_watch(watch['id']))['status'] == 'ok'
+        assert db.list_offers()[0]['availability'] != 'in_stock'
+        assert db.list_events() == []
+    finally:
+        await engine.close()
+        db.close()
