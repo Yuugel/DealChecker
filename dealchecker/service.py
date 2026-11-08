@@ -134,6 +134,7 @@ class Engine:
         watch = WatchInput.model_validate({k: v for k, v in row.items() if k in WatchInput.model_fields})
         results: list[Offer] = []
         errors = []
+        partial_warnings = []
         schedules = self.db.source_schedules(id)
         started = time.time()
         selected = [source for source in watch.source_ids
@@ -189,6 +190,9 @@ class Engine:
             outcomes[source] = (source_error, minimum)
             if source_error:
                 errors.append(f"{source}: {source_error}")
+            elif (skipped := getattr(found, "skipped_pages", 0)):
+                partial_warnings.append(
+                    f"{source}: {skipped} Produktdetailseite(n) ausgelassen; gültige Angebote verarbeitet")
         latest = self.db.get_watch(id)
         if latest is None:
             return {"status": "missing", "offers": 0, "error": None}
@@ -222,8 +226,8 @@ class Engine:
         for source in watch.source_ids:
             if source not in outcomes and schedules[source]["last_error"]:
                 errors.append(f"{source}: {schedules[source]['last_error']}")
-        status = "error" if errors else "ok"
-        error = "; ".join(errors) if errors else None
+        status = "error" if errors else "partial" if partial_warnings else "ok"
+        error = "; ".join([*errors, *partial_warnings]) or None
         self.db.record_check(id, observations, status, error, now, source_outcomes=outcomes)
         await self.flush_outbox()
         return {"status": status, "offers": len(observations), "error": error}
