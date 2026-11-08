@@ -2,11 +2,17 @@
 
 ## Überwachungen
 
-Eine exakte Überwachung prüft ein identifiziertes Produkt. Eine dynamische Suche fragt die gewählten Quellen mit Suchbegriff und Synonymen erneut ab und kann dadurch neue Produkte entdecken. Mehrdeutige exakte Titel werden nicht stillschweigend einem ähnlichen Produkt zugeordnet.
+Eine exakte Überwachung prüft ein identifiziertes Produkt. Eine dynamische Suche fragt die gewählten Quellen mit Suchbegriff und Synonymen erneut ab und kann dadurch neue Produkte entdecken. Mehrdeutige exakte Titel werden nicht stillschweigend einem ähnlichen Produkt zugeordnet. „Exakt beobachten“ an einem Treffer übernimmt dessen Quell-ID und URL in einen neuen Auftrag; die breite Suchanfrage wird dabei entfernt.
 
 App-ID und Produkt-URL sind quellenspezifisch. EAN/GTIN, Modell und Variante können nur genutzt werden, wenn die Quelle sie liefert. Ein nicht unterstütztes Identitätsfeld führt zu einem sichtbaren Fehler. Quellenauswahl und Händlerfilter sind getrennt: Ein Feed kann mehrere Händler enthalten. Hersteller-, Kategorie- und Textfilter benötigen passende Quelldaten; eine unbekannte Angabe erfüllt den Filter nicht.
 
 Die Preisobergrenze beschränkt Discovery-Ergebnisse. Der Wunschpreis steuert Alarme. Beide beziehen sich auf bekannte Gesamtpreise. Gutscheine und Grundpreise werden als Hinweise angezeigt; unbekannte Gutscheinbedingungen werden nicht automatisch vom Preis abgezogen. Unterschiedliche Packungsgrößen/Varianten werden nicht ohne belegte Identität miteinander verglichen.
+
+## Produktidentität und Referenzen
+
+Verkäufer, Variante, Packungsgröße und Zustand werden in der Angebotsidentität getrennt gespeichert. Ein aktueller Händlervergleich erscheint nur bei mindestens zwei verschiedenen Händlern, frischen lieferbaren Einzelangeboten und bekannten Gesamtpreisen. Gruppiert wird über eine prüfziffergültige GTIN oder vollständig belegte Hersteller-/Modell-/Varianten-/Packungsangaben. Unterschiede und fehlende Merkmale können bewusst getrennte Gruppen ergeben; ähnliche Namen allein reichen nie. Die Vergleichsgruppe verändert die historische Alarmbewertung nicht.
+
+Bestenvergleich liefert **Preisreferenzen**, keine bestätigten Händlerangebote. Referenzen haben weder bekannten Versand noch belastbaren Bestand; ihr Verlauf zeigt ausdrücklich den Artikelreferenzpreis. Sie lösen keine Kaufpreisalarme aus und nehmen nicht am Gesamtpreisvergleich teil. Ein gesetztes Preislimit filtert sie aus, weil der Gesamtpreis unbekannt ist. [Quellenbeschreibung](bestenvergleich-source.md).
 
 ## Bewertung
 
@@ -23,14 +29,19 @@ Nach einem Alarm wird dasselbe Angebot nur bei einer weiteren relevanten Verbess
 
 ## Zeitplanung
 
-| Priorität | Normal | Black Friday |
+| Überwachung | Normal | Black Week |
 |---|---:|---:|
-| Kritisch | 5 Minuten | 5 Minuten |
-| Hoch | 15 Minuten | 7,5 Minuten |
-| Normal | 30 Minuten | 15 Minuten |
-| Niedrig | 60 Minuten | 30 Minuten |
+| Breite Suche, jede Priorität | 8 Stunden | 3 Stunden |
+| Exakt · Kritisch | 30 Minuten | 5 Minuten |
+| Exakt · Hoch | 45 Minuten | 10 Minuten |
+| Exakt · Normal | 2 Stunden | 30 Minuten |
+| Exakt · Niedrig | 8 Stunden | 1 Stunde |
 
-Eigene Intervalle zwischen 5 Minuten und 24 Stunden sind möglich. Black Friday endet automatisch nach höchstens 24 Stunden. Cache, Zeitlimits, Anbieterlimits, parallele Aufträge und Fehler-Backoff können die tatsächliche Prüfung verzögern. Die manuelle Prüfung umgeht diese Schutzmaßnahmen nicht.
+Eigene Normal- und Black-Week-Intervalle zwischen 5 Minuten und 24 Stunden sind möglich. Quellenspezifische Paare haben Vorrang vor Auftragswerten; beide Werte angeben oder beide leer lassen. Das strengere Quellenminimum gilt immer: Modula24/Apple 5 Minuten, Bestenvergleich 20 Minuten. Die Oberfläche zeigt die wirksamen Intervalle je Quelle.
+
+Beim Upgrade behalten vorhandene Aufträge den vorherigen Normal-/Black-Friday-Takt als explizite Werte. Für die neuen automatischen Standards diese Felder leeren. Black Friday lässt sich für 24 Stunden oder 7 Tage aktivieren und endet automatisch. Beim Wechsel werden gesunde Quellen neu terminiert; bestehende Fehlerfristen werden nicht abgekürzt. Beispielwerte für später freigeschaltete Quellen wären Amazon 2 Stunden/20 Minuten und MediaMarkt/Saturn 7 Stunden/45 Minuten. Diese Beispiele bedeuten **keine vorhandenen Händleradapter**.
+
+Cache, Anbieterlimits, parallele Aufträge und Fehler-Backoff können die tatsächliche Prüfung verzögern. „Jetzt prüfen“ fragt gesunde Quellen sofort an, verwendet jedoch weiterhin deren Cache und HTTP-Limits; fehlerhafte Quellen behalten ihre Wiederholungsfrist. Ein Cachetreffer erhält keinen künstlich neuen Beobachtungszeitpunkt. Bekannte Modula24-Varianten mit URL werden gezielt samt Versandangebot abgefragt; nur eine unbekannte reine Varianten-ID benötigt einmal den Katalog zur URL-Auflösung.
 
 Fehler-Backoff gilt getrennt je Quelle und Überwachung. Fällt eine Quelle dauerhaft aus, verlängert sich nur ihre Wiederholungsfrist (bis zum 16-fachen Intervall); funktionierende Quellen behalten ihren normalen Takt. Die nächste Prüfung des Auftrags ist die früheste Quellenfälligkeit. Auch wenn eine fehlerhafte Quelle gerade auf ihren Wiederholungsversuch wartet, bleibt ihr Fehler sichtbar. Angebote einer noch nicht fälligen Quelle werden durch die Prüfung einer anderen Quelle nicht automatisch ungültig.
 

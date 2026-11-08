@@ -192,8 +192,16 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
 
         async def get_json(self, url, **kwargs):
             self.calls += 1
-            assert url == 'https://modula24.com/feeds/products.de.json'
             assert kwargs['allowed_hosts'] == {'modula24.com'}
+            if url == 'https://modula24.com/products/synthetic-konnektor.json':
+                return {'product': {
+                    'handle': 'synthetic-konnektor', 'title': 'Synthetic Konnektor',
+                    'vendor': 'Modula24', 'product_type': 'Konnektoren',
+                    'options': [{'name': 'Title', 'position': 1}],
+                    'variants': [{'id': 100, 'title': 'Default Title', 'price': self.price.split()[0],
+                                  'available': True, 'option1': 'Default Title'}],
+                }}
+            assert url == 'https://modula24.com/feeds/products.de.json'
             return {'generated': '2026-01-01T00:00:00Z', 'language': 'de', 'currency': 'EUR', 'items': [{
                 'id': 'M24-100', 'variant_id': '100', 'title': 'Synthetic Konnektor',
                 'link': 'https://modula24.com/products/synthetic-konnektor',
@@ -201,6 +209,12 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
                 'product_type': 'Konnektoren', 'options': {},
                 'shipping': [{'countries': ['DE'], 'price': '3.99 EUR'}],
             }]}
+
+        async def post_json_response(self, url, payload, **kwargs):
+            self.calls += 1
+            assert url == 'https://modula24.com/api/checkout/shipping'
+            assert payload == {'country': 'DE', 'items': [{'id': '100', 'qty': 1}], 'currency': 'EUR'}
+            return {'country': 'DE', 'currency': 'EUR', 'shipping_options': [{'id': 'dhl', 'cost': 3.99}]}
 
     catalog = Catalog()
     config = Config(data_dir=tmp_path)
@@ -223,7 +237,7 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
             'source_ids': ['modula24'], 'target_cents': 1500,
         }).json()['id']
         assert c.post(f'/api/watches/{exact}/check', json={}).json()['status'] == 'ok'
-        assert catalog.calls == 1  # discovery and exact share the bounded catalogue cache
+        assert catalog.calls == 3  # discovery feed, targeted product, shipping quote
         state = c.get('/api/state').json()
         assert [e['total_cents'] for e in state['events']] == [1399]
         exact_offer = next(o for o in state['offers'] if o['watch_id'] == exact)
@@ -234,6 +248,6 @@ def test_physical_discovery_to_exact_monitoring_after_restart(tmp_path, monkeypa
         assert c.post(f'/api/watches/{exact}/check', json={}).json()['status'] == 'ok'
         state = c.get('/api/state').json()
         assert [e['total_cents'] for e in state['events']] == [1199, 1399]
-        assert catalog.calls == 2
+        assert catalog.calls == 5  # restart exact lookup needs no full catalogue
         history = c.get(f"/api/offers/{exact_offer['id']}/history").json()
         assert [h['total_cents'] for h in history] == [1399, 1199]

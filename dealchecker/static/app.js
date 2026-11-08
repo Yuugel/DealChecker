@@ -239,7 +239,8 @@
       const ids = new Set(watchOffers.map(item => Number(item.id)));
       const matching = comparisons.filter(group => {
         if (!Array.isArray(group.offer_ids)) return false;
-        const matched = watchOffers.filter(item => group.offer_ids.some(id => Number(id) === Number(item.id)) && ids.has(Number(item.id)));
+        if (!group.offer_ids.some(id => ids.has(Number(id)))) return false;
+        const matched = (Array.isArray(data.offers) ? data.offers : []).filter(item => group.offer_ids.some(id => Number(id) === Number(item.id)));
         return new Set(matched.map(item => item.merchant || item.seller || item.source)).size > 1;
       });
       if (matching.length) {

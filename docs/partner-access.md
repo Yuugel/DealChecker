@@ -1,0 +1,14 @@
+# Nächste freizuschaltende Produktzugänge
+
+Ohne vorhandene Partnerzugänge wurden keine Konten, Verträge oder kostenpflichtigen Dienste aktiviert. Die [Quellenmatrix](phase2-sources.md) enthält Primärquellen und Probegrenzen. Ein erreichbarer Shop oder eine Seller-API ersetzt keine Erlaubnis und keinen funktionierenden Verbraucher-Datenzugang.
+
+| Priorität | Zugang | Konkreter nächster Schritt | Erst danach implementieren/validieren |
+|---|---|---|---|
+| 1 | Awin: notebooksbilliger, Coolblue, ggf. Lidl | Publisherkonto und konkrete Programme freischalten lassen; freigegebene Feedliste und Nutzungsbedingungen prüfen. Feed-Schlüssel nur lokal als Geheimnis konfigurieren. | Einen realen Feed prüfen: EAN/Variante, Verkäufer, Versand, Bestand, Beobachtungs-/Updatezeit; bedingten Download und lokalen Suchindex ergänzen. Coolblue enthält bewusst nur eine lieferbare/profitable Auswahl. |
+| 2 | Galaxus über Tradedoubler | Publisher/Site registrieren, Galaxus-Programm und Produktfeed freischalten lassen; echten PRODUCTS-Token und Feed-ID beziehen. Programm-ID ist keine Feed-ID. | Keyword-/EAN-Suche und gezieltes Produkt anhand einer echten Antwort verbinden; verschachtelte Produkte/Angebote korrekt trennen. Raw-Feed-Downloadlimit nicht als Such-API-Limit behandeln. |
+| 3 | billiger.de Publisher | Eignung als registriertes Unternehmen/Kleinunternehmer, Kooperationsvertrag und erlaubte Anwendung klären. | Autorisierte Suche und Händlerangebote samt Versand/Verfügbarkeit live prüfen; API- und Delta-Aktualität respektieren. |
+| 4 | MediaMarkt/Saturn EasyMarketing, OTTO | Programme beantragen; tatsächliche Produktliste und konkrete Nutzungsrechte im Portal bestätigen. | Feldqualität und Feed-Aktualität testen. OTTO-Daten werden nur zweimal täglich bereitgestellt; schnelleres Polling schafft keine frischeren Daten. |
+| 5 | eBay Browse | Entwicklerkonto/Anwendungsschlüssel und Buy-API-Produktionsfreigabe beschaffen. | EUR/DE-Versandkontext, mehrere Verkäufer/Zustände, Artikelidentität und 5.000-Aufrufe-Tagesbudget prüfen. Sandbox-Daten zählen nicht als reale Angebote. |
+| später | Amazon Creators | Associates-Voraussetzungen einschließlich qualifizierter Verkäufe und API-Freigabe erfüllen. | Nutzungs-/Cachebedingungen, fehlende Versandfelder und tatsächliche Lizenz für den Anwendungsfall prüfen. Keepa wäre eine gesondert zustimmungspflichtige kostenpflichtige Alternative. |
+
+Freischaltung und Nutzungsrechte müssen zum tatsächlichen privaten/öffentlichen Betriebsmodell passen. Ohne echte Antwortdaten sind zusätzliche Händleradapter noch kein Nutzwert; deshalb enthält diese Phase keine aktivierten Platzhalteradapter. Nach einer Freigabe zuerst einen vollständigen Pfad aus Suche, Auswahl, gezieltem Abruf, Persistenz und Alarm für mehrere reale Produkte abnehmen, dann weitere Händler desselben Netzwerks ergänzen.

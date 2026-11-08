@@ -96,7 +96,7 @@ def _quote_shipping(data: object) -> int | None:
 
 
 class Modula24Adapter(FeedAdapter):
-    """One merchant, one finite feed; a catalog refresh verifies exact variants."""
+    """Authorized catalog discovery and targeted variant/DE shipping refresh."""
 
     def __init__(self, client):
         super().__init__(client, {"id": "modula24", "name": "Modula24", "url": _FEED_URL})
