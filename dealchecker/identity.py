@@ -13,6 +13,16 @@ def canonical_gtin(value: str) -> str | None:
     return digits.zfill(14)
 
 
+def matches_product_term(offer, term: str) -> bool:
+    """Discovery relevance only; exact identity is always checked separately."""
+    gtin = canonical_gtin(term)
+    if gtin:
+        return canonical_gtin(offer.gtin) == gtin
+    tokens = set(re.findall(r'\w+', term.casefold()))
+    text = ' '.join((offer.name, offer.model, offer.manufacturer, offer.category, offer.variant))
+    return bool(tokens) and tokens.issubset(set(re.findall(r'\w+', text.casefold())))
+
+
 def comparison_identity(offer: dict) -> tuple | None:
     gtin = offer.get("gtin", "")
     manufacturer = offer.get("manufacturer", "").strip().casefold()

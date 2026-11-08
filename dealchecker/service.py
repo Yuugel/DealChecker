@@ -5,6 +5,7 @@ import time
 
 from .db import Database, FEED_FRESH_SECONDS, interval
 from .models import Offer, WatchInput
+from .identity import canonical_gtin, matches_product_term
 
 SOURCE_CHECK_TIMEOUT = 60
 
@@ -14,23 +15,29 @@ def _contains(text: str, term: str) -> bool:
 
 
 def _matches(watch: WatchInput, offer: Offer) -> bool:
+    if watch.gtin:
+        expected_gtin = canonical_gtin(watch.gtin)
+        if not offer.gtin:
+            raise ValueError('source does not provide requested gtin')
+        if expected_gtin is None or canonical_gtin(offer.gtin) != expected_gtin:
+            return False
+    for field in ("model", "variant"):
+        expected = getattr(watch, field)
+        actual = getattr(offer, field)
+        if expected:
+            if not actual:
+                raise ValueError(f"source does not provide requested {field}")
+            if actual.casefold() != expected.casefold():
+                return False
     if watch.kind == "exact":
         if watch.product_id and offer.product_id.casefold() != watch.product_id.casefold():
             return False
-        for field in ("gtin", "model", "variant"):
-            expected = getattr(watch, field)
-            actual = getattr(offer, field)
-            if expected:
-                if not actual:
-                    raise ValueError(f"source does not provide requested {field}")
-                if actual.casefold() != expected.casefold():
-                    return False
         if not any((watch.product_id, watch.url, watch.gtin, watch.model, watch.variant)) and watch.query:
             if offer.name.casefold() != watch.query.casefold():
                 return False
     else:
         terms = [watch.query, *watch.synonyms]
-        if not any(_contains(" ".join((offer.name, offer.model, offer.manufacturer, offer.category)), t) for t in terms):
+        if not any(matches_product_term(offer, t) for t in terms):
             return False
     if watch.manufacturer and not _contains(offer.manufacturer, watch.manufacturer):
         return False
@@ -42,6 +49,12 @@ def _matches(watch: WatchInput, offer: Offer) -> bool:
         return False
     if any(_contains(offer.merchant, x) for x in watch.merchants_exclude):
         return False
+    if watch.sellers_include and not any(_contains(offer.seller, x) for x in watch.sellers_include):
+        return False
+    if any(_contains(offer.seller, x) for x in watch.sellers_exclude):
+        return False
+    if offer.offer_type == 'reference' and watch.reference_max_price_cents is not None:
+        return offer.price_cents <= watch.reference_max_price_cents
     if watch.max_price_cents is not None and (offer.total_cents is None or offer.total_cents > watch.max_price_cents):
         return False
     return True
@@ -121,6 +134,7 @@ class Engine:
         watch = WatchInput.model_validate({k: v for k, v in row.items() if k in WatchInput.model_fields})
         results: list[Offer] = []
         errors = []
+        partial_warnings = []
         schedules = self.db.source_schedules(id)
         started = time.time()
         selected = [source for source in watch.source_ids
@@ -176,6 +190,9 @@ class Engine:
             outcomes[source] = (source_error, minimum)
             if source_error:
                 errors.append(f"{source}: {source_error}")
+            elif (skipped := getattr(found, "skipped_pages", 0)):
+                partial_warnings.append(
+                    f"{source}: {skipped} Produktdetailseite(n) ausgelassen; gültige Angebote verarbeitet")
         latest = self.db.get_watch(id)
         if latest is None:
             return {"status": "missing", "offers": 0, "error": None}
@@ -209,16 +226,16 @@ class Engine:
         for source in watch.source_ids:
             if source not in outcomes and schedules[source]["last_error"]:
                 errors.append(f"{source}: {schedules[source]['last_error']}")
-        status = "error" if errors else "ok"
-        error = "; ".join(errors) if errors else None
+        status = "error" if errors else "partial" if partial_warnings else "ok"
+        error = "; ".join([*errors, *partial_warnings]) or None
         self.db.record_check(id, observations, status, error, now, source_outcomes=outcomes)
         await self.flush_outbox()
         return {"status": status, "offers": len(observations), "error": error}
 
     async def flush_outbox(self):
-        if not self.notifier or not self.db.get_settings()["notification_enabled"]:
-            return
         async with self._delivery_lock:
+            if not self.notifier or not self.db.get_settings()["notification_enabled"]:
+                return
             for event in self.db.due_outbox(limit=1):
                 try:
                     await asyncio.wait_for(self.notifier.send(event), timeout=15)

@@ -1,15 +1,18 @@
 """Discord webhook formatting over the injected guarded HTTP client."""
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
+import re
+
+from .network import validate_url
 
 
 class DiscordNotifier:
     def __init__(self, client, webhook_url: str):
+        validate_url(webhook_url, {'discord.com', 'discordapp.com'})
         parts = urlsplit(webhook_url)
         if (parts.scheme != "https" or parts.hostname not in {"discord.com", "discordapp.com"}
                 or parts.port is not None or parts.username or parts.password or parts.query or parts.fragment
-                or not parts.path.startswith("/api/webhooks/") or len(parts.path.split("/")) != 5
-                or any(not segment for segment in parts.path.split("/")[3:])):
+                or not re.fullmatch(r'/api/webhooks/[0-9]{1,25}/[A-Za-z0-9_-]+', parts.path)):
             raise ValueError("invalid Discord webhook URL")
         self.client = client
         self.webhook_url = webhook_url

@@ -207,7 +207,7 @@ async def test_feed_observed_at_preserved_and_stale_quality():
 def test_registry_validates_ids_and_urls():
     client = FakeClient([])
     registry = build_registry(client, [{"id": "shop", "name": "Shop", "url": "https://feed.example/catalog.json"}])
-    assert set(registry) == {"apple", "modula24", "bestenvergleich", "shop"}
+    assert set(registry) == {"apple", "modula24", "bestenvergleich", "alternate", "berrybase", "lidl", "shop"}
     assert all(s["configured"] for s in source_catalog(registry))
     with pytest.raises(ValueError):
         build_registry(client, [{"id": "apple", "name": "Bad", "url": "https://feed.example/catalog.json"}])

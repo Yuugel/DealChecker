@@ -1,5 +1,7 @@
 # Phase 2: geprüfte Quellen und Abdeckung
 
+Historischer Phase-2-Stand. [Phase 3](phase3-sources.md) implementiert ALTERNATE, BerryBase und Lidl-Direktlinks; [private Partnernutzung](partner-access.md) korrigiert die damalige Awin-/Tradedoubler-Empfehlung für eine ausschließlich lokale Anwendung.
+
 Stand der Recherche: 8. November 2026. Diese Matrix unterscheidet dokumentierte Verbraucher-/Publisherdaten von Verkäufer-APIs. „Nicht verifiziert“ heißt, dass in dieser Recherche kein passender offizieller, frei nutzbarer Lesezugang belegt wurde; es ist keine Aussage, dass ein Anbieter intern keinerlei API betreibt. Öffentliche Webseiten und interne Endpunkte gelten nicht automatisch als erlaubte Datenfeeds.
 
 ## Größere Quellen

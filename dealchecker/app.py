@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 from pathlib import Path
 import time
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, StrictBool, Field
+from pydantic import BaseModel, ConfigDict, StrictBool, Field, SecretStr
 
 from . import __version__
 from .adapters import build_registry, source_catalog
@@ -20,6 +23,8 @@ from .notifications import DiscordNotifier
 from .scheduler import Scheduler
 from .security import LocalOnlyMiddleware
 from .service import Engine
+from .links import resolve_link
+from .notification_settings import NotificationSettings
 
 
 class SettingsPatch(BaseModel):
@@ -29,8 +34,19 @@ class SettingsPatch(BaseModel):
     notification_enabled: StrictBool | None = None
 
 
+class LinkInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    url: str = Field(min_length=1, max_length=1000)
+
+
+class NotificationInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    webhook_url: SecretStr
+
+
 def create_app(config: Config | None = None, *, adapters=None, start_scheduler=True):
     config = config or Config.from_env()
+    secrets = NotificationSettings(config.data_dir)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -40,10 +56,22 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
             engine = scheduler = None
             try:
                 registry = build_registry(client, config.feeds) if adapters is None else adapters
-                notifier = DiscordNotifier(client, config.discord_webhook) if config.discord_webhook else None
+                source = 'environment' if config.discord_webhook else 'local' if secrets.path.exists() else 'none'
+                notification_error = None
+                try:
+                    webhook = config.discord_webhook or secrets.load()
+                    notifier = DiscordNotifier(client, webhook) if webhook else None
+                except ValueError:
+                    notifier = None
+                    notification_error = 'Benachrichtigungskonfiguration ungültig. Bitte neu hinterlegen oder entfernen.'
+                    db.update_settings({'notification_enabled':False})
+                db.bind_notification_destination(notifier.webhook_url if notifier else '')
                 engine = Engine(db, registry, notifier)
                 scheduler = Scheduler(engine)
                 app.state.db, app.state.engine, app.state.registry = db, engine, registry
+                app.state.client = client
+                app.state.notification_source = source
+                app.state.notification_error = notification_error
                 if start_scheduler:
                     await scheduler.start()
                 yield
@@ -60,6 +88,13 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
     app.add_middleware(LocalOnlyMiddleware)
     static = Path(__file__).parent / 'static'
     app.mount('/static', StaticFiles(directory=static, check_dir=False), name='static')
+    link_slots = asyncio.Semaphore(4)
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_validation(request, exc):
+        if request.url.path == '/api/notifications/config':
+            return JSONResponse(status_code=422, content={'detail':'Ungültige Benachrichtigungskonfiguration'})
+        return await request_validation_exception_handler(request, exc)
 
     @app.get('/')
     async def index():
@@ -86,11 +121,61 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
             }))
         return {'watches':watches, 'offers':db.list_offers(), 'comparisons':db.comparisons(), 'events':db.list_events(),
                 'checks':checks, 'settings':db.get_settings(), 'sources':sources,
-                'notification_configured':bool(config.discord_webhook)}
+                'notification_configured':bool(app.state.engine.notifier),
+                'notification_configuration_error':app.state.notification_error,
+                'notification_configuration_source':app.state.notification_source}
+
+    @app.put('/api/notifications/config')
+    async def configure_notification(payload: NotificationInput):
+        if config.discord_webhook:
+            raise HTTPException(409, 'Webhook wird über die Prozessumgebung verwaltet.')
+        value = payload.webhook_url.get_secret_value().strip()
+        try:
+            if not value or len(value) > 2048:
+                raise ValueError()
+            notifier = DiscordNotifier(app.state.client, value)
+        except ValueError:
+            raise HTTPException(422, 'Bitte eine gültige Discord-Webhook-Adresse eingeben.') from None
+        async with app.state.engine._delivery_lock:
+            try:
+                secrets.save(value)
+            except OSError:
+                raise HTTPException(500, 'Webhook konnte nicht lokal gespeichert werden.') from None
+            app.state.db.bind_notification_destination(value)
+            app.state.engine.notifier = notifier
+            app.state.notification_source = 'local'
+            app.state.notification_error = None
+        return {'configured':True, 'source':'local'}
+
+    @app.delete('/api/notifications/config')
+    async def remove_notification():
+        if config.discord_webhook:
+            raise HTTPException(409, 'Webhook wird über die Prozessumgebung verwaltet.')
+        async with app.state.engine._delivery_lock:
+            try:
+                secrets.clear()
+            except OSError:
+                raise HTTPException(500, 'Webhook konnte nicht entfernt werden.') from None
+            app.state.db.bind_notification_destination('')
+            app.state.db.update_settings({'notification_enabled':False})
+            app.state.engine.notifier = None
+            app.state.notification_source = 'none'
+            app.state.notification_error = None
+        return {'configured':False, 'source':'none'}
 
     def validate_sources(watch):
         if any(s not in app.state.registry for s in watch.source_ids):
             raise HTTPException(422, 'Eine gewählte Quelle ist nicht konfiguriert')
+        if watch.kind == 'discovery' and any(not getattr(app.state.registry[s], 'supports_search', True) for s in watch.source_ids):
+            raise HTTPException(422, 'Eine gewählte Quelle unterstützt nur Produktlinks, keine freie Suche.')
+
+    @app.post('/api/links/resolve')
+    async def link_preview(payload: LinkInput):
+        try:
+            async with link_slots:
+                return await resolve_link(payload.url.strip(), app.state.registry)
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise HTTPException(422, str(exc)[:300]) from None
 
     @app.post('/api/watches', status_code=201)
     async def add_watch(watch: WatchInput):
@@ -129,8 +214,8 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
         values = patch.model_dump(exclude_none=True)
         if values.get('black_friday_until', 0) > time.time() + 7 * 86400 + 2:
             raise HTTPException(422, 'Black-Friday-Modus ist auf maximal sieben Tage begrenzt')
-        if values.get('notification_enabled') and not config.discord_webhook:
-            raise HTTPException(422, 'Discord-Webhook fehlt in der lokalen Umgebungskonfiguration')
+        if values.get('notification_enabled') and not app.state.engine.notifier:
+            raise HTTPException(422, 'Bitte zuerst unter Benachrichtigungen einen Discord-Webhook hinterlegen.')
         try:
             return app.state.db.update_settings(values)
         except ValueError as exc:

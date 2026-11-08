@@ -28,8 +28,11 @@ class WatchInput(BaseModel):
     exclusions: list[str] = Field(default_factory=list, max_length=20)
     merchants_include: list[str] = Field(default_factory=list, max_length=20)
     merchants_exclude: list[str] = Field(default_factory=list, max_length=20)
+    sellers_include: list[str] = Field(default_factory=list, max_length=20)
+    sellers_exclude: list[str] = Field(default_factory=list, max_length=20)
     target_cents: int | None = Field(default=None, ge=0, strict=True)
     max_price_cents: int | None = Field(default=None, ge=0, strict=True)
+    reference_max_price_cents: int | None = Field(default=None, ge=0, strict=True)
     priority: Literal["critical", "high", "normal", "low"] = "normal"
     interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
     black_friday_interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
@@ -41,7 +44,7 @@ class WatchInput(BaseModel):
     def trim(cls, value):
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("source_ids", "synonyms", "exclusions", "merchants_include", "merchants_exclude")
+    @field_validator("source_ids", "synonyms", "exclusions", "merchants_include", "merchants_exclude", "sellers_include", "sellers_exclude")
     @classmethod
     def clean_list(cls, value):
         cleaned = [item.strip() for item in value]

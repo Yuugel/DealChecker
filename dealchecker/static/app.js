@@ -5,8 +5,9 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const byId = (id) => document.getElementById(id);
   const API = '/api';
-  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
+  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, notificationConfigBusy: false, notificationFeedback: '', search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
   const dialog = byId('watch-dialog');
+  const resolveDialog = byId('resolve-dialog');
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -91,6 +92,12 @@
       if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname && !parsed.username && !parsed.password) return parsed.href;
     } catch { /* invalid product URL: render as unavailable */ }
     return null;
+  }
+  function safeHttpsUrl(raw) {
+    const safe = safeHttpUrl(raw);
+    if (!safe) return null;
+    try { return new URL(safe).protocol === 'https:' ? safe : null; }
+    catch { return null; }
   }
   function offerState(offer) {
     if (isReferenceOffer(offer)) return ['warn', 'Referenzpreis · kein Händlerangebot'];
@@ -185,9 +192,9 @@
         priceBox.append(details);
         }
       } else {
-        priceBox.append(el('span', 'current-price', 'Noch kein Angebot'), el('small', 'price-detail', watch.last_error ? 'Letzte Prüfung mit Fehler' : 'Wird nach erster Prüfung angezeigt'));
+        priceBox.append(el('span', 'current-price', 'Noch kein Angebot'), el('small', 'price-detail', watch.last_error ? 'Letzte Prüfung mit Fehler' : watch.last_checked ? 'Letzte Prüfung ohne passende Treffer' : 'Wird nach erster Prüfung angezeigt'));
       }
-      const status = el('span', `offer-state ${offer ? offerState(offer)[0] : 'warn'}`, offer ? offerState(offer)[1] : (watch.paused ? 'Pausiert' : 'Noch nicht geprüft'));
+      const status = el('span', `offer-state ${offer ? offerState(offer)[0] : 'warn'}`, offer ? offerState(offer)[1] : (watch.paused ? 'Pausiert' : watch.last_error ? 'Quellenfehler' : watch.last_checked ? 'Keine passenden Treffer' : 'Noch nicht geprüft'));
       const actions = el('div', 'watch-actions');
       const check = el('button', 'small-action', 'Prüfen'); check.type = 'button'; check.setAttribute('aria-label', `${watch.name}: Jetzt prüfen`); check.disabled = !!watch.running || !!watch.paused || !!data.settings?.paused; check.title = check.disabled ? (watch.paused || data.settings?.paused ? 'Prüfungen sind pausiert' : 'Prüfung läuft bereits') : 'Jetzt manuell prüfen'; check.addEventListener('click', () => manualCheck(watch, check));
       const historyButton = el('button', 'small-action', 'Verlauf'); historyButton.type = 'button'; historyButton.setAttribute('aria-label', `${watch.name}: Preisverlauf anzeigen`); historyButton.disabled = !offer; historyButton.addEventListener('click', () => showHistory(offer, watch));
@@ -205,6 +212,7 @@
       if (watch.last_error) left.append(el('span', 'meta-item stale', `Letzter Fehler: ${watch.last_error}`));
       if (watch.target_cents != null) left.append(el('span', 'meta-item', `Wunschpreis ${fmtMoney(watch.target_cents)}`));
       if (watch.max_price_cents != null) left.append(el('span', 'meta-item', `Limit ${fmtMoney(watch.max_price_cents)}`));
+      if (watch.reference_max_price_cents != null) left.append(el('span', 'meta-item', `Referenzbudget ${fmtMoney(watch.reference_max_price_cents)} · Artikelpreis`));
       const right = el('div', 'meta-right');
       if (offer) {
         right.append(el('span', 'meta-item', offer.merchant ? `Quelle: ${offer.merchant}` : `Quelle: ${offer.source || 'Unbekannt'}`));
@@ -327,6 +335,7 @@
       if (event.notification_error) eventDetail += ` · ${event.notification_status === 'sent' ? 'Letzter Benachrichtigungsfehler' : 'Benachrichtigung: erneuter Versuch ausstehend'}${event.notification_attempts ? ` nach ${event.notification_attempts} Versuchen` : ''}: ${event.notification_error}`;
       else if (event.notification_status === 'pending') eventDetail += ' · Benachrichtigung ausstehend';
       else if (event.notification_status === 'sent') eventDetail += ' · Benachrichtigung gesendet';
+      else if (event.notification_status === 'cancelled') eventDetail += ' · Versand wegen geänderter Kanal-Konfiguration verworfen';
       else if (event.notification_status === 'disabled') eventDetail += ' · Benachrichtigungen deaktiviert';
       row.append(el('small', '', eventDetail));
       const link = safeHttpUrl(event.url);
@@ -378,10 +387,19 @@
     byId('setting-bf-duration').disabled = false;
     byId('bf-status').textContent = until > Date.now() / 1000 ? `Aktiv bis ${fmtTime(until)}.` : 'Der Modus ist nicht aktiv.';
     const configured = !!data.notification_configured;
+    const configSource = data.notification_configuration_source || (configured ? 'environment' : 'none');
     byId('setting-notifications').checked = !!settings.notification_enabled;
     byId('setting-notifications').disabled = !configured;
-    byId('notification-status').textContent = configured ? 'Kanal ist konfiguriert; lokale Ereignisse werden unabhängig davon gespeichert.' : 'Kein Benachrichtigungskanal konfiguriert. Der Schalter ist daher nicht verfügbar.';
-    byId('settings-feedback').textContent = '';
+    byId('notification-status').textContent = data.notification_configuration_error || (configured ? 'Kanal ist konfiguriert; lokale Ereignisse werden unabhängig davon gespeichert.' : 'Kein Benachrichtigungskanal konfiguriert. Der Schalter ist daher nicht verfügbar.');
+    byId('notification-webhook').disabled = configSource === 'environment' || state.notificationConfigBusy;
+    byId('notification-config-save').disabled = configSource === 'environment' || state.notificationConfigBusy;
+    byId('notification-config-remove').disabled = configSource !== 'local' || state.notificationConfigBusy;
+    byId('notification-config-help').textContent = configSource === 'environment'
+      ? 'Die Webhook-Adresse stammt aus der Dienstumgebung und kann hier nicht bearbeitet werden.'
+      : configSource === 'local'
+        ? 'Eine lokale Adresse ist gespeichert, wird aber aus Sicherheitsgründen nie erneut angezeigt. Eine neue Eingabe ersetzt sie.'
+        : 'Webhook-Adresse wird lokal gespeichert. Das Speichern sendet keine Testnachricht und aktiviert Benachrichtigungen nicht.';
+    byId('settings-feedback').textContent = state.notificationFeedback;
   }
   function render(data) {
     state.data = data;
@@ -412,6 +430,7 @@
     byId('watch-category').value = ''; byId('watch-manufacturer').value = '';
     byId('watch-synonyms').value = ''; byId('watch-exclusions').value = '';
     byId('watch-merchants-include').value = ''; byId('watch-merchants-exclude').value = '';
+    byId('watch-sellers-include').value = ''; byId('watch-sellers-exclude').value = '';
     byId('watch-bf-interval').value = '';
     state.sourceIntervalDraft = {};
     byId('watch-form-error').textContent = '';
@@ -419,15 +438,17 @@
   }
   function buildSourceOptions(sources, selected = ['apple']) {
     const root = byId('source-options'); root.replaceChildren();
+    const discovery = $('input[name="watch-kind"][value="discovery"]')?.checked;
+    if (discovery) selected = selected.filter(id => sources.find(source => source.id === id)?.supports_search !== false);
     const available = [...sources];
     for (const id of selected) {
       if (!available.some(source => source.id === id)) available.push({ id, name: `${id} · nicht im Quellenkatalog`, configured: false, description: '' });
     }
     for (const source of available) {
       const label = el('label', 'source-check');
-      const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = source.configured === false && !selected.includes(source.id);
+      const input = document.createElement('input'); input.type = 'checkbox'; input.name = 'watch-source'; input.value = source.id; input.checked = selected.includes(source.id); input.disabled = (source.configured === false && !selected.includes(source.id)) || (discovery && source.supports_search === false);
       input.addEventListener('change', () => renderSourceIntervalOptions());
-      label.append(input, document.createTextNode(source.name || source.id)); root.append(label);
+      label.append(input, document.createTextNode(`${source.name || source.id}${source.supports_search === false ? ' · nur Link' : ''}`)); root.append(label);
     }
     if (!sources.length) root.append(el('span', 'field-help', 'Der Dienst meldet noch keine verfügbaren Quellen.'));
     renderSourceIntervalOptions();
@@ -474,10 +495,13 @@
       byId('watch-manufacturer').value = watch.manufacturer || '';
       byId('watch-synonyms').value = (watch.synonyms || []).join(', ');
       byId('watch-exclusions').value = (watch.exclusions || []).join(', ');
-      byId('watch-merchants-include').value = (watch.merchants_include || []).join(', ');
-      byId('watch-merchants-exclude').value = (watch.merchants_exclude || []).join(', ');
+      byId('watch-merchants-include').value = (watch.merchants_include ?? []).join(', ');
+      byId('watch-merchants-exclude').value = (watch.merchants_exclude ?? []).join(', ');
+      byId('watch-sellers-include').value = (watch.sellers_include ?? []).join(', ');
+      byId('watch-sellers-exclude').value = (watch.sellers_exclude ?? []).join(', ');
       byId('watch-target').value = watch.target_cents == null ? '' : (watch.target_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-max').value = watch.max_price_cents == null ? '' : (watch.max_price_cents / 100).toFixed(2).replace('.', ',');
+      byId('watch-reference-max').value = watch.reference_max_price_cents == null ? '' : (watch.reference_max_price_cents / 100).toFixed(2).replace('.', ',');
       byId('watch-priority').value = watch.priority || 'normal';
       byId('watch-interval').value = watch.interval_seconds == null ? '' : watch.interval_seconds;
       byId('watch-bf-interval').value = watch.black_friday_interval_seconds == null ? '' : watch.black_friday_interval_seconds;
@@ -488,9 +512,9 @@
       buildSourceOptions(state.data?.sources || [], ['apple']);
     }
     if (offer) {
-      const sourceId = String(offer.source || '');
+      const sourceId = String(offer.source || offer.source_id || '');
       byId('watch-dialog-title').textContent = 'Angebot exakt beobachten';
-      byId('watch-name').value = offer.name || '';
+      byId('watch-name').value = String(offer.name || '').slice(0, 200);
       const exact = $('input[name="watch-kind"][value="exact"]'); if (exact) exact.checked = true;
       byId('watch-query').value = '';
       buildSourceOptions(state.data?.sources || [], [sourceId]);
@@ -507,6 +531,7 @@
   function getWatchPayload() {
     const target = moneyInputToCents(byId('watch-target').value, 'Wunschpreis');
     const max = moneyInputToCents(byId('watch-max').value, 'Preislimit');
+    const referenceMax = moneyInputToCents(byId('watch-reference-max').value, 'Referenzbudget');
     const rawInterval = byId('watch-interval').value.trim();
     const interval = rawInterval ? Number(rawInterval) : null;
     if (interval !== null && (!Number.isSafeInteger(interval) || interval < 300 || interval > 86400)) throw new Error('Prüfintervall muss zwischen 300 und 86400 Sekunden liegen.');
@@ -538,10 +563,52 @@
       gtin: byId('watch-gtin').value.trim(), model: byId('watch-model').value.trim(), variant: byId('watch-variant').value.trim(),
       synonyms: splitList(byId('watch-synonyms').value, 5), category: byId('watch-category').value.trim(), manufacturer: byId('watch-manufacturer').value.trim(),
       exclusions: splitList(byId('watch-exclusions').value), merchants_include: splitList(byId('watch-merchants-include').value), merchants_exclude: splitList(byId('watch-merchants-exclude').value),
-      target_cents: target, max_price_cents: max,
+      sellers_include: splitList(byId('watch-sellers-include').value), sellers_exclude: splitList(byId('watch-sellers-exclude').value),
+      target_cents: target, max_price_cents: max, reference_max_price_cents: referenceMax,
       priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
       source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
     };
+  }
+  function openDiscoverySearch(query) {
+    openWatchEditor();
+    byId('watch-name').value = query.slice(0, 200);
+    byId('watch-query').value = query;
+    const discovery = $('input[name="watch-kind"][value="discovery"]');
+    if (discovery) discovery.checked = true;
+    const sources = (state.data?.sources || []).filter(source => source.configured !== false && source.supports_search === true && source.id !== 'apple').map(source => source.id);
+    buildSourceOptions(state.data?.sources || [], sources);
+    if (!sources.length) byId('watch-form-error').textContent = 'Der Dienst meldet derzeit keine eingerichteten Suchquellen.';
+  }
+  function renderResolvedOffers(result) {
+    const root = byId('resolve-results'); root.replaceChildren();
+    byId('resolve-source').textContent = result.source_name || result.source_id || '';
+    for (const warning of (result.warnings || [])) root.append(el('p', 'resolve-warning', warning));
+    const offers = Array.isArray(result.offers) ? result.offers : [];
+    if (!offers.length) root.append(el('p', 'resolve-empty', 'Für diesen Link wurden keine passenden Produkte gefunden.'));
+    offers.forEach(offer => {
+      const card = el('article', 'resolve-card');
+      const title = el('strong', '', offer.name || 'Unbenanntes Produkt');
+      const isReference = offer.offer_type === 'reference' || offer.provenance === 'reference';
+      const total = Number.isInteger(offer.price_cents) && Number.isInteger(offer.shipping_cents) ? offer.price_cents + offer.shipping_cents : null;
+      const availability = ({ in_stock: 'Auf Lager', out_of_stock: 'Nicht auf Lager', unknown: 'Verfügbarkeit unbekannt' })[offer.availability] || 'Verfügbarkeit unbekannt';
+      const meta = el('small', '', [isReference ? 'Referenzpreis · kein Händlerangebot' : (offer.seller || offer.merchant || 'Händler unbekannt'), offer.price_cents == null ? 'Artikelpreis unbekannt' : `${fmtMoney(offer.price_cents, offer.currency)} Artikel`, isReference ? 'Versand unbekannt' : offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`, total == null || isReference ? 'Gesamt unbekannt' : `Gesamt ${fmtMoney(total, offer.currency)}`, availability, offer.gtin ? `GTIN ${offer.gtin}` : '', offer.model ? `Modell ${offer.model}` : '', offer.variant ? `Variante ${offer.variant}` : ''].filter(Boolean).join(' · '));
+      const choose = el('button', 'button button-primary', 'Dieses Produkt beobachten'); choose.type = 'button';
+      choose.addEventListener('click', () => { resolveDialog.close(); openWatchEditor(null, { ...offer, source: offer.source || result.source_id, url: offer.url || byId('quick-url').value.trim() }); });
+      card.append(title, meta, choose);
+      const offerUrl = safeHttpsUrl(offer.url || byId('quick-url').value.trim());
+      if (offerUrl) { const link = el('a', 'resolve-link', 'Produktseite öffnen ↗'); link.href = offerUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; card.append(link); }
+      root.append(card);
+    });
+    resolveDialog.showModal();
+  }
+  async function resolveProductUrl(event) {
+    event.preventDefault();
+    const url = byId('quick-url').value.trim();
+    if (!url || !safeHttpUrl(url) || new URL(url).protocol !== 'https:') { toast('Bitte einen gültigen HTTPS-Produktlink eingeben.', 'error'); return; }
+    const button = $('#quick-url-form button'); button.disabled = true;
+    try { renderResolvedOffers(await api('/links/resolve', { method: 'POST', body: { url } })); }
+    catch (error) { toast(error.message, 'error'); }
+    finally { button.disabled = false; }
   }
   async function saveWatch(event) {
     event.preventDefault();
@@ -651,12 +718,58 @@
       await refresh();
     } catch (error) { status.textContent = `Einstellung konnte nicht gespeichert werden: ${error.message}`; toast(status.textContent, 'error'); await refresh(); }
   }
+  async function saveNotificationConfiguration(event) {
+    event.preventDefault();
+    if (state.notificationConfigBusy) return;
+    const field = byId('notification-webhook');
+    const webhookUrl = field.value.trim();
+    if (!safeHttpsUrl(webhookUrl)) { state.notificationFeedback = 'Bitte eine gültige HTTPS-Webhook-Adresse eingeben.'; byId('settings-feedback').textContent = state.notificationFeedback; field.focus(); return; }
+    state.notificationConfigBusy = true;
+    renderSettings(state.data || {});
+    try {
+      await api('/notifications/config', { method: 'PUT', body: { webhook_url: webhookUrl } });
+      field.value = '';
+      state.notificationFeedback = 'Webhook lokal gespeichert. Benachrichtigungen bleiben separat geschaltet.';
+      await refresh();
+    } catch {
+      state.notificationFeedback = 'Webhook konnte nicht gespeichert werden. Prüfe die Adresse und versuche es erneut.';
+    } finally {
+      state.notificationConfigBusy = false;
+      if (state.data) renderSettings(state.data);
+      byId('settings-feedback').textContent = state.notificationFeedback;
+    }
+  }
+  async function removeNotificationConfiguration() {
+    if (state.notificationConfigBusy) return;
+    state.notificationConfigBusy = true;
+    renderSettings(state.data || {});
+    try {
+      await api('/notifications/config', { method: 'DELETE' });
+      byId('notification-webhook').value = '';
+      state.notificationFeedback = 'Lokale Webhook-Konfiguration entfernt.';
+      await refresh();
+    } catch {
+      state.notificationFeedback = 'Lokale Webhook-Konfiguration konnte nicht entfernt werden.';
+    } finally {
+      state.notificationConfigBusy = false;
+      if (state.data) renderSettings(state.data);
+      byId('settings-feedback').textContent = state.notificationFeedback;
+    }
+  }
   function bind() {
     byId('watch-form').addEventListener('submit', saveWatch);
+    byId('quick-name-form').addEventListener('submit', event => { event.preventDefault(); const query = byId('quick-name').value.trim(); if (query) openDiscoverySearch(query); });
+    byId('quick-url-form').addEventListener('submit', resolveProductUrl);
     byId('new-watch-button').addEventListener('click', () => openWatchEditor());
     byId('new-watch-button-secondary').addEventListener('click', () => openWatchEditor());
     $$('.close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog')?.close()));
-    [dialog, byId('history-dialog')].forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) modal.close(); }));
+    [dialog, resolveDialog, byId('history-dialog')].forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) modal.close(); }));
+    $$('input[name="watch-kind"]').forEach(input => input.addEventListener('change', () => {
+      const selected = $$('input[name="watch-source"]:checked').map(item => item.value);
+      const discovery = $('input[name="watch-kind"][value="discovery"]')?.checked;
+      const sources = state.data?.sources || [];
+      buildSourceOptions(sources, discovery ? selected.filter(id => sources.find(source => source.id === id)?.supports_search !== false) : selected);
+    }));
     byId('watch-search').addEventListener('input', event => { state.search = event.target.value; if (state.data) renderWatchList(state.data); });
     byId('refresh-button').addEventListener('click', () => refresh(true));
     byId('activity-refresh').addEventListener('click', () => refresh(true));
@@ -673,6 +786,8 @@
       }
     });
     byId('setting-notifications').addEventListener('change', event => updateSettings('notification_enabled', event.target.checked, event.target.checked ? 'Benachrichtigungen aktiviert.' : 'Benachrichtigungen deaktiviert.'));
+    byId('notification-config-form').addEventListener('submit', saveNotificationConfiguration);
+    byId('notification-config-remove').addEventListener('click', removeNotificationConfiguration);
     $$('.nav-link').forEach(link => link.addEventListener('click', () => { $$('.nav-link').forEach(item => item.classList.toggle('active', item === link)); }));
   }
   bind();

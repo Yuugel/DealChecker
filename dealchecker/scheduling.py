@@ -4,7 +4,7 @@ import time
 
 OLD_DEFAULTS = {"critical": 300, "high": 900, "normal": 1800, "low": 3600}
 EXACT_DEFAULTS = {
-    "normal": (7200, 1800),
+    "normal": (25200, 2700),
     "high": (2700, 600),
     "critical": (1800, 300),
     "low": (28800, 3600),

@@ -1,5 +1,6 @@
 """SQLite state. Every completed check is committed in one transaction."""
 import json
+import hashlib
 import sqlite3
 import time
 from pathlib import Path
@@ -8,7 +9,7 @@ from .models import Offer, WatchInput
 from .identity import comparison_identity
 from .scheduling import OLD_DEFAULTS, interval, interval_pair
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 FEED_FRESH_SECONDS = 600
 
 
@@ -134,6 +135,39 @@ class Database:
             try:
                 self.conn.execute("ALTER TABLE watch_sources ADD COLUMN pending_refresh INTEGER NOT NULL DEFAULT 0")
                 self.conn.execute("PRAGMA user_version=6")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            version = 6
+        if version < 7:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                old_exact = {"normal": (7200, 1800), "high": (2700, 600),
+                             "critical": (1800, 300), "low": (28800, 3600)}
+                for row in self.conn.execute("SELECT id,data FROM watches"):
+                    data = json.loads(row["data"])
+                    pair = (28800, 10800) if data["kind"] == "discovery" else old_exact[data["priority"]]
+                    if data.get("interval_seconds") is None:
+                        data["interval_seconds"] = pair[0]
+                    if data.get("black_friday_interval_seconds") is None:
+                        data["black_friday_interval_seconds"] = pair[1]
+                    data.setdefault("sellers_include", [])
+                    data.setdefault("sellers_exclude", [])
+                    data.setdefault("reference_max_price_cents", None)
+                    self.conn.execute("UPDATE watches SET data=? WHERE id=?", (json.dumps(data), row["id"]))
+                self.conn.execute("PRAGMA user_version=7")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            version = 7
+        if version < 8:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                if 'notification_destination' not in {r[1] for r in self.conn.execute('PRAGMA table_info(settings)')}:
+                    self.conn.execute("ALTER TABLE settings ADD COLUMN notification_destination TEXT NOT NULL DEFAULT ''")
+                self.conn.execute("PRAGMA user_version=8")
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
@@ -465,6 +499,19 @@ class Database:
         now = time.time() if now is None else now
         return [{"id": r["id"], **json.loads(r["data"])} for r in self.conn.execute(
             "SELECT b.id,e.data FROM outbox b JOIN events e ON e.id=b.event_id WHERE b.status='pending' AND b.next_due<=? ORDER BY b.id LIMIT ?", (now, limit))]
+
+    def bind_notification_destination(self, webhook: str):
+        """Never move queued private alerts to another destination, including after restart.
+
+        Only a one-way fingerprint is persisted; it is not exposed in API settings.
+        Pre-upgrade queues without a known destination are conservatively cancelled.
+        """
+        fingerprint = hashlib.sha256(webhook.encode('utf-8')).hexdigest() if webhook else ''
+        with self.conn:
+            previous = self.conn.execute('SELECT notification_destination FROM settings WHERE id=1').fetchone()[0]
+            if not fingerprint or previous != fingerprint:
+                self.conn.execute("UPDATE outbox SET status='cancelled',last_error=NULL WHERE status='pending'")
+                self.conn.execute('UPDATE settings SET notification_destination=? WHERE id=1', (fingerprint,))
 
     def outbox_result(self, id: int, error: str | None):
         with self.conn:
