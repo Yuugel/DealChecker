@@ -93,11 +93,20 @@
     return null;
   }
   function offerState(offer) {
-    if (offer?.provenance === 'reference' || offer?.source === 'bestenvergleich') return ['warn', 'Referenzpreis · kein Händlerangebot'];
+    if (isReferenceOffer(offer)) return ['warn', 'Referenzpreis · kein Händlerangebot'];
     const evaluation = String(offer?.evaluation || 'Unzureichende Daten');
     if (/Wunschpreis|Bestpreis|Sehr gutes|Preisrückgang/i.test(evaluation)) return ['good', evaluation];
     if (/Unzureichend|Kein relevantes/i.test(evaluation)) return ['warn', evaluation];
     return ['', evaluation];
+  }
+  function isReferenceOffer(offer) {
+    return offer?.provenance === 'reference' || offer?.source === 'bestenvergleich' || offer?.offer_type === 'reference';
+  }
+  function conditionLabel(value) {
+    return ({ new: 'Neu', used: 'Gebraucht', refurbished: 'Generalüberholt', unknown: 'Unbekannt' })[value] || '';
+  }
+  function offerTypeLabel(value) {
+    return ({ retail: 'Händlerangebot', reference: 'Referenzpreis' })[value] || '';
   }
   function renderStats(data) {
     const watches = Array.isArray(data.watches) ? data.watches : [];
@@ -148,7 +157,7 @@
         return aTotal - bTotal || (Number(b.checked_at) || 0) - (Number(a.checked_at) || 0);
       });
       const offer = watchOffers[0] || null;
-      const reference = offer && (offer.provenance === 'reference' || offer.source === 'bestenvergleich');
+      const reference = isReferenceOffer(offer);
       let productSubline = `${watch.kind === 'discovery' ? 'Entdecken' : 'Exakt'}${watch.query ? ` · ${watch.query}` : ''}${sourceNames ? ` · ${sourceNames}` : ''}`;
       if (offer) {
         const headline = offer.stale ? 'Letzter bekannter Treffer: ' : watchOffers.length > 1 && offer.total_cents != null ? 'Günstigster Treffer: ' : watchOffers.length > 1 ? 'Treffer: ' : '';
@@ -242,7 +251,7 @@
           groupNode.append(el('small', '', `${group.identity_basis === 'gtin' ? 'GTIN' : 'Hersteller + Modell'} ${group.identity_value} · niedrigster Gesamtpreis ${fmtMoney(group.lowest_total_cents)}`));
           matched.forEach(item => {
             const line = el('div', 'comparison-offer');
-            const label = [item.name, item.merchant || item.seller || 'Händler unbekannt', item.pack_size, item.condition].filter(Boolean).join(' · ');
+            const label = [item.name, item.seller || item.merchant || 'Händler unbekannt', item.pack_size, conditionLabel(item.condition)].filter(Boolean).join(' · ');
             line.append(el('span', '', label), el('strong', '', item.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(item.total_cents)));
             line.append(el('small', '', ageText(item.checked_at)));
             const itemUrl = safeHttpUrl(item.url);
@@ -257,7 +266,7 @@
     });
   }
   function renderOffer(offer, watch) {
-    const reference = offer.provenance === 'reference' || offer.source === 'bestenvergleich';
+    const reference = isReferenceOffer(offer);
     const row = el('article', 'individual-offer');
     const heading = el('div', 'individual-offer-heading');
     const title = el('div', 'individual-offer-title');
@@ -290,8 +299,8 @@
     chips.append(el('span', 'meta-chip', availabilityLabel(offer.availability, offer.provenance)));
     if (offer.seller) chips.append(el('span', 'meta-chip', `Verkäufer: ${offer.seller}`));
     if (offer.pack_size) chips.append(el('span', 'meta-chip', `Packung: ${offer.pack_size}`));
-    if (offer.condition) chips.append(el('span', 'meta-chip', `Zustand: ${offer.condition}`));
-    if (offer.offer_type) chips.append(el('span', 'meta-chip', `Angebotstyp: ${offer.offer_type}`));
+    if (conditionLabel(offer.condition)) chips.append(el('span', 'meta-chip', `Zustand: ${conditionLabel(offer.condition)}`));
+    if (offerTypeLabel(offer.offer_type)) chips.append(el('span', 'meta-chip', `Angebotstyp: ${offerTypeLabel(offer.offer_type)}`));
     chips.append(el('span', 'meta-chip', `Quelle: ${offer.source || 'unbekannt'}`));
     const fromFeed = offer.provenance === 'feed' || offer.quality === 'feed_reported';
     chips.append(el('span', `meta-chip${offer.stale ? ' stale' : ''}`, `${offer.stale ? 'Veraltet · ' : ''}${fromFeed ? 'Katalogdaten · ' : ''}${ageText(offer.checked_at)}`));
@@ -503,14 +512,20 @@
     const rawBfInterval = byId('watch-bf-interval').value.trim();
     const bfInterval = rawBfInterval ? Number(rawBfInterval) : null;
     if (bfInterval !== null && (!Number.isSafeInteger(bfInterval) || bfInterval < 300 || bfInterval > 86400)) throw new Error('Black-Friday-Intervall muss zwischen 300 und 86400 Sekunden liegen.');
-    for (const [sourceId, entry] of Object.entries(state.sourceIntervalDraft)) {
-      for (const key of ['normal_seconds', 'black_friday_seconds']) {
-        const value = entry[key];
-        if (value != null && (!Number.isSafeInteger(value) || value < 300 || value > 86400)) throw new Error(`Quellenintervall für ${sourceId} muss zwischen 300 und 86400 Sekunden liegen.`);
-      }
-    }
     const sourceIds = $$('input[name="watch-source"]:checked').map(input => input.value);
     if (!sourceIds.length) throw new Error('Bitte mindestens eine konfigurierte Quelle auswählen.');
+    const sourceIntervals = {};
+    for (const sourceId of sourceIds) {
+      const entry = state.sourceIntervalDraft[sourceId] || {};
+      const normal = entry.normal_seconds;
+      const blackFriday = entry.black_friday_seconds;
+      if (normal == null && blackFriday == null) continue;
+      if (normal == null || blackFriday == null) throw new Error(`Für ${sourceId} bitte beide quellenspezifischen Intervalle ausfüllen oder beide Felder leeren.`);
+      for (const value of [normal, blackFriday]) {
+        if (!Number.isSafeInteger(value) || value < 300 || value > 86400) throw new Error(`Quellenintervall für ${sourceId} muss zwischen 300 und 86400 Sekunden liegen.`);
+      }
+      sourceIntervals[sourceId] = { normal_seconds: normal, black_friday_seconds: blackFriday };
+    }
     if ((byId('watch-product-id').value.trim() || byId('watch-url').value.trim()) && sourceIds.length !== 1) throw new Error('Produkt-ID oder URL benötigt genau eine Quelle.');
     const url = byId('watch-url').value.trim();
     if (url && !safeHttpUrl(url)) throw new Error('Produkt-URL muss eine gültige HTTP- oder HTTPS-Adresse ohne Zugangsdaten sein.');
@@ -524,7 +539,7 @@
       exclusions: splitList(byId('watch-exclusions').value), merchants_include: splitList(byId('watch-merchants-include').value), merchants_exclude: splitList(byId('watch-merchants-exclude').value),
       target_cents: target, max_price_cents: max,
       priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
-      source_intervals: JSON.parse(JSON.stringify(state.sourceIntervalDraft)), paused: byId('watch-paused').checked,
+      source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
     };
   }
   async function saveWatch(event) {
@@ -567,7 +582,7 @@
   async function showHistory(offer, watch) {
     const historyDialog = byId('history-dialog');
     byId('history-title').textContent = `Preisverlauf · ${offer.name || watch.name || 'Produkt'}`;
-    const isReference = offer.provenance === 'reference' || offer.source === 'bestenvergleich';
+    const isReference = isReferenceOffer(offer);
     byId('history-subtitle').textContent = isReference ? 'Referenzpreis ohne Versand · kein Händlerangebot und kein Gesamtpreis' : `${offer.merchant || offer.source || 'Quelle'} · Gesamtpreis nur bei bekanntem Versand`;
     const rows = byId('history-rows'); rows.replaceChildren();
     byId('history-chart').replaceChildren();
