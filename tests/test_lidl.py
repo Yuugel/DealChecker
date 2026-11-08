@@ -52,7 +52,7 @@ def page(*, product_fields=None, offer_fields=None, layer_fields=None, extra_off
 
 @pytest.mark.asyncio
 async def test_direct_offer_and_de_shipping():
-    client = FakeHttp(page(product_fields={"mpn": "M-1"}))
+    client = FakeHttp(page(product_fields={"mpn": "M-1"}, offer_fields={"seller": {"name": "Lidl"}}))
     adapter = LidlAdapter(client)
     [offer] = await adapter.lookup(watch(gtin="4006381333931", model="m-1", product_id="100000001"))
 
@@ -63,6 +63,13 @@ async def test_direct_offer_and_de_shipping():
         "lidl", "Lidl", "4006381333931", "new", "in_stock",
     )
     assert (offer.price_cents, offer.shipping_cents, offer.total_cents) == (4399, 595, 4994)
+
+
+@pytest.mark.asyncio
+async def test_missing_seller_is_unknown_even_with_lidl_site_organization():
+    markup = page() + '<script type="application/ld+json">{"@type":"Organization","name":"Lidl"}</script>'
+    [offer] = await LidlAdapter(FakeHttp(markup)).lookup(watch())
+    assert (offer.merchant, offer.seller, offer.total_cents) == ("Lidl", "", 4994)
 
 
 @pytest.mark.asyncio

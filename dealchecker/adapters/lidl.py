@@ -120,10 +120,12 @@ def _parse_offer(html: str, product_id: str) -> Offer:
             or offer.get("priceSpecification")):
         raise ValueError("Lidl liefert keinen eindeutigen öffentlichen EUR-Preis für den Artikel")
     seller = offer.get("seller")
+    verified_seller = ""
     if seller is not None:
         seller_name = _text(seller.get("name")) if isinstance(seller, dict) else _text(seller)
-        if seller_name.casefold() != _SELLER.casefold():
+        if seller_name.casefold() not in {"lidl", "lidl digital deutschland gmbh & co. kg"}:
             raise ValueError("Lidl meldet einen anderen Verkäufer")
+        verified_seller = _SELLER
 
     name = _text(product.get("name"))
     if not name:
@@ -135,7 +137,7 @@ def _parse_offer(html: str, product_id: str) -> Offer:
         raise ValueError("Lidl liefert keinen gültigen Kaufpreis")
     availability = _AVAILABILITY.get(_type(offer.get("availability")), "unknown")
     return Offer(
-        source="lidl", merchant=_SELLER, seller=_SELLER, product_id=product_id, name=name,
+        source="lidl", merchant=_SELLER, seller=verified_seller, product_id=product_id, name=name,
         url=canonical_url, gtin=_product_gtin(product), manufacturer=brand,
         model=_text(product.get("model")) or _text(product.get("mpn")),
         variant=_text(product.get("color")), category=_text(product.get("category")),
