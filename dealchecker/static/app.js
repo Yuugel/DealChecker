@@ -5,7 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const byId = (id) => document.getElementById(id);
   const API = '/api';
-  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '' };
+  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, search: '', expandedWatches: new Set() };
   const dialog = byId('watch-dialog');
 
   function el(tag, className, text) {
@@ -60,7 +60,12 @@
       catch { throw new Error(`Antwort des lokalen Dienstes ist ungültig (HTTP ${response.status}).`); }
     }
     if (!response.ok) {
-      const detail = typeof payload?.detail === 'string' ? payload.detail : `HTTP ${response.status}`;
+      let detail = `HTTP ${response.status}`;
+      if (typeof payload?.detail === 'string') detail = payload.detail;
+      else if (Array.isArray(payload?.detail)) {
+        const messages = payload.detail.map(item => typeof item?.msg === 'string' ? item.msg : '').filter(Boolean);
+        if (messages.length) detail = messages.join(' · ');
+      }
       throw new Error(detail);
     }
     return payload;
@@ -78,9 +83,6 @@
     dot.classList.toggle('bad', !ok);
     $('strong', wrap).textContent = label || (ok ? 'Dienst verbunden' : 'Dienst nicht erreichbar');
     $('small', wrap).textContent = 'Lokaler Dienst';
-    const coverage = byId('coverage-status');
-    $('.health-dot', coverage).className = `health-dot ${ok ? 'ok' : 'bad'}`;
-    coverage.lastChild.textContent = ok ? ' Verbunden' : ' Verbindung fehlgeschlagen';
   }
   function safeHttpUrl(raw) {
     if (typeof raw !== 'string' || !raw.trim()) return null;
@@ -135,14 +137,21 @@
       const copy = el('div', 'product-copy');
       copy.append(el('strong', '', watch.name || 'Ohne Namen'));
       const sourceNames = (watch.source_ids || []).map(id => (data.sources || []).find(s => s.id === id)?.name || id).join(', ');
-      copy.append(el('small', '', `${watch.kind === 'discovery' ? 'Entdecken' : 'Exakt'}${watch.query ? ` · ${watch.query}` : ''}${sourceNames ? ` · ${sourceNames}` : ''}`));
+      const watchOffers = (offersByWatch.get(String(watch.id)) || []).slice().sort((a, b) => {
+        const aTotal = Number.isInteger(a.total_cents) ? a.total_cents : Number.POSITIVE_INFINITY;
+        const bTotal = Number.isInteger(b.total_cents) ? b.total_cents : Number.POSITIVE_INFINITY;
+        return aTotal - bTotal || (Number(b.checked_at) || 0) - (Number(a.checked_at) || 0);
+      });
+      const offer = watchOffers[0] || null;
+      let productSubline = `${watch.kind === 'discovery' ? 'Entdecken' : 'Exakt'}${watch.query ? ` · ${watch.query}` : ''}${sourceNames ? ` · ${sourceNames}` : ''}`;
+      if (offer) productSubline += ` · ${watchOffers.length > 1 && offer.total_cents != null ? 'Günstigster Treffer: ' : watchOffers.length > 1 ? 'Treffer: ' : ''}${offer.name || watch.name}`;
+      copy.append(el('small', '', productSubline));
       product.append(monogram, copy);
 
-      const watchOffers = offersByWatch.get(String(watch.id)) || [];
-      const offer = watchOffers[0] || null;
       const priceBox = el('div');
       if (offer) {
-        priceBox.append(el('span', 'current-price', offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency)));
+        const totalLabel = offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency);
+        priceBox.append(el('span', 'current-price', watchOffers.length > 1 && offer.total_cents != null ? `Ab ${totalLabel}` : totalLabel));
         let detail = `${fmtMoney(offer.price_cents, offer.currency)} Artikel`;
         detail += offer.shipping_cents == null ? ' · Versand unbekannt' : offer.shipping_cents === 0 ? ' · Versand inklusive' : ` · + ${fmtMoney(offer.shipping_cents, offer.currency)} Versand`;
         if (Number.isInteger(offer.comparison_cents) && offer.comparison_cents >= 0) {
@@ -175,13 +184,65 @@
       const right = el('div', 'meta-right');
       if (offer) {
         right.append(el('span', 'meta-item', offer.merchant ? `Quelle: ${offer.merchant}` : `Quelle: ${offer.source || 'Unbekannt'}`));
-        if (offer.availability) right.append(el('span', 'meta-item', offer.availability === 'in_stock' ? 'Verfügbar' : offer.availability === 'out_of_stock' ? 'Nicht verfügbar' : 'Verfügbarkeit unbekannt'));
+        if (offer.availability) right.append(el('span', 'meta-item', availabilityLabel(offer.availability, offer.provenance)));
       }
       if (watch.paused) right.append(el('span', 'meta-item', 'Pausiert'));
       meta.append(left, right);
       card.append(main, meta);
+      if (watchOffers.length) {
+        const disclosure = document.createElement('details');
+        disclosure.className = 'watch-offers';
+        disclosure.open = state.expandedWatches.has(String(watch.id));
+        disclosure.addEventListener('toggle', () => {
+          if (disclosure.open) state.expandedWatches.add(String(watch.id));
+          else state.expandedWatches.delete(String(watch.id));
+        });
+        const summary = el('summary', 'offers-summary', `${watchOffers.length} Angebot${watchOffers.length === 1 ? '' : 'e'} anzeigen`);
+        summary.setAttribute('aria-label', `${watchOffers.length} einzelne Angebote für ${watch.name} anzeigen oder ausblenden`);
+        const offerList = el('div', 'individual-offers');
+        watchOffers.forEach(item => offerList.append(renderOffer(item, watch)));
+        disclosure.append(summary, offerList);
+        card.append(disclosure);
+      }
       list.append(card);
     });
+  }
+  function renderOffer(offer, watch) {
+    const row = el('article', 'individual-offer');
+    const heading = el('div', 'individual-offer-heading');
+    const title = el('div', 'individual-offer-title');
+    title.append(el('strong', '', offer.name || 'Unbenanntes Produkt'));
+    title.append(el('small', '', offer.merchant || 'Händler unbekannt'));
+    heading.append(title);
+    const actions = el('div', 'individual-offer-actions');
+    const history = el('button', 'small-action', 'Verlauf');
+    history.type = 'button';
+    history.setAttribute('aria-label', `Preisverlauf für ${offer.name || 'dieses Angebot'} anzeigen`);
+    history.addEventListener('click', () => showHistory(offer, watch));
+    actions.append(history);
+    const href = safeHttpUrl(offer.url);
+    if (href) {
+      const link = el('a', 'small-action offer-link', 'Angebot ↗');
+      link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      actions.append(link);
+    }
+    heading.append(actions);
+    const price = el('div', 'individual-offer-price');
+    price.append(el('strong', 'offer-total', offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency)));
+    price.append(el('span', '', `${fmtMoney(offer.price_cents, offer.currency)} Artikel`));
+    price.append(el('span', '', offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`));
+    const chips = el('div', 'individual-offer-meta');
+    chips.append(el('span', 'meta-chip', availabilityLabel(offer.availability, offer.provenance)));
+    chips.append(el('span', 'meta-chip', `Quelle: ${offer.source || 'unbekannt'}`));
+    const fromFeed = offer.provenance === 'feed' || offer.quality === 'feed_reported';
+    chips.append(el('span', `meta-chip${offer.stale ? ' stale' : ''}`, `${offer.stale ? 'Veraltet · ' : ''}${fromFeed ? 'Katalogdaten · ' : ''}${ageText(offer.checked_at)}`));
+    chips.append(el('span', 'meta-chip', `${fromFeed ? 'Feed-Abruf' : 'Geprüft'}: ${fmtTime(offer.checked_at)}`));
+    if (Number.isInteger(offer.comparison_cents)) chips.append(el('span', 'meta-chip', `Beobachteter Vergleich ${fmtMoney(offer.comparison_cents, offer.currency)}`));
+    if (Number.isInteger(offer.savings_cents)) chips.append(el('span', 'meta-chip', `Ersparnis ${fmtMoney(offer.savings_cents, offer.currency)}`));
+    if (offer.coupon) chips.append(el('span', 'meta-chip offer-extra', `Gutschein: ${offer.coupon}`));
+    if (offer.unit_price) chips.append(el('span', 'meta-chip offer-extra', `Grundpreis: ${offer.unit_price}`));
+    row.append(heading, price, chips);
+    return row;
   }
   function renderActivity(data) {
     const eventsNode = byId('events-list'); eventsNode.replaceChildren();
@@ -193,9 +254,10 @@
       row.append(el('strong', '', name));
       row.append(el('span', 'activity-value', event.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(event.total_cents)));
       let eventDetail = `${event.reason || 'Beobachtet'} · ${fmtTime(event.checked_at || event.created_at)}`;
-      if (event.notification_status === 'failed') eventDetail += ` · Benachrichtigung fehlgeschlagen${event.notification_attempts ? ` (${event.notification_attempts} Versuche)` : ''}${event.notification_error ? `: ${event.notification_error}` : ''}`;
+      if (event.notification_error) eventDetail += ` · ${event.notification_status === 'sent' ? 'Letzter Benachrichtigungsfehler' : 'Benachrichtigung: erneuter Versuch ausstehend'}${event.notification_attempts ? ` nach ${event.notification_attempts} Versuchen` : ''}: ${event.notification_error}`;
       else if (event.notification_status === 'pending') eventDetail += ' · Benachrichtigung ausstehend';
       else if (event.notification_status === 'sent') eventDetail += ' · Benachrichtigung gesendet';
+      else if (event.notification_status === 'disabled') eventDetail += ' · Benachrichtigungen deaktiviert';
       row.append(el('small', '', eventDetail));
       const link = safeHttpUrl(event.url);
       if (link) { const anchor = el('a', 'activity-status', 'Angebot öffnen ↗'); anchor.href = link; anchor.target = '_blank'; anchor.rel = 'noopener noreferrer'; row.append(anchor); }
@@ -224,12 +286,16 @@
       top.append(el('span', 'source-badge', String(source.name || source.id || '?').charAt(0).toLocaleUpperCase('de-DE')));
       const title = el('strong', '', source.name || source.id || 'Quelle'); top.append(title); card.append(top);
       card.append(el('p', '', source.description || 'Keine nähere Quellenbeschreibung verfügbar.'));
+      const hasSuccess = Number.isFinite(source.last_success) && source.last_success > 0;
       const status = el('div', `source-status${source.last_error ? ' error' : ''}`);
-      const dot = el('span', `health-dot${source.last_error ? ' bad' : ' ok'}`); dot.setAttribute('aria-hidden', 'true'); status.append(dot);
-      const statusText = source.configured === false ? 'Nicht konfiguriert' : source.last_error ? `Fehler: ${source.last_error}` : source.last_checked ? 'Zuletzt erfolgreich geprüft' : 'Konfiguriert · noch nicht geprüft';
+      const dot = el('span', `health-dot${source.last_error ? ' bad' : hasSuccess ? ' ok' : ''}`); dot.setAttribute('aria-hidden', 'true'); status.append(dot);
+      const statusText = source.configured === false ? 'Nicht konfiguriert' : source.last_error ? `Letzter Fehler: ${source.last_error}` : hasSuccess ? 'Quelle konfiguriert' : 'Quelle konfiguriert · noch nicht geprüft';
       status.append(document.createTextNode(statusText));
-      status.append(el('span', 'time', source.last_checked ? fmtTime(source.last_checked) : ''));
-      card.append(status); root.append(card);
+      const times = el('div', 'source-times');
+      if (source.last_checked) times.append(el('span', '', `Letzte Prüfung: ${fmtTime(source.last_checked)}`));
+      if (hasSuccess) times.append(el('span', '', `Letzte erfolgreiche Prüfung: ${fmtTime(source.last_success)}`));
+      card.append(status, times);
+      root.append(card);
     }
   }
   function renderSettings(data) {
@@ -247,7 +313,13 @@
   function render(data) {
     state.data = data;
     state.watchById = new Map((data.watches || []).map(w => [String(w.id), w]));
-    setHealth(true);
+    setHealth(true, 'Lokaler Dienst bereit');
+    const apple = (data.sources || []).find(source => source.id === 'apple');
+    const coverage = byId('coverage-status');
+    const coverageDot = $('.health-dot', coverage);
+    const coverageText = apple?.last_error ? 'Letzter Quellenfehler' : Number.isFinite(apple?.last_success) && apple.last_success > 0 ? `Zuletzt erfolgreich ${fmtTime(apple.last_success)}` : apple?.configured === false ? 'Nicht konfiguriert' : 'Quelle konfiguriert · noch nicht geprüft';
+    coverageDot.className = `health-dot${apple?.last_error ? ' bad' : Number.isFinite(apple?.last_success) && apple.last_success > 0 ? ' ok' : ''}`;
+    coverage.lastChild.textContent = ` ${coverageText}`;
     renderStats(data); renderWatchList(data); renderActivity(data); renderSources(data); renderSettings(data);
     byId('updated-at').textContent = new Intl.DateTimeFormat('de-DE', { timeStyle: 'short' }).format(new Date());
   }
@@ -345,6 +417,10 @@
     catch (error) { errorNode.textContent = error.message; return; }
     if (!payload.name) { errorNode.textContent = 'Bitte einen Anzeigenamen eingeben.'; byId('watch-name').focus(); return; }
     if (payload.kind === 'discovery' && !payload.query) { errorNode.textContent = 'Der Entdecken-Modus benötigt eine Suchanfrage.'; byId('watch-query').focus(); return; }
+    if (payload.kind === 'exact' && !payload.query && !payload.product_id && !payload.url && !payload.gtin && !payload.model) {
+      errorNode.textContent = 'Für eine exakte Beobachtung Suchanfrage, Produkt-ID, URL, GTIN oder Modell eintragen. Für Titelabgleich den Produktnamen auch unter Suchanfrage eingeben.';
+      byId('watch-query').focus(); return;
+    }
     if (payload.target_cents != null && payload.max_price_cents != null && payload.target_cents > payload.max_price_cents) { errorNode.textContent = 'Der Wunschpreis liegt über dem Preislimit.'; return; }
     state.formBusy = true; byId('watch-save').disabled = true;
     try {
@@ -380,7 +456,8 @@
       const observations = Array.isArray(history) ? history : [];
       for (const item of observations) {
         const row = document.createElement('tr');
-        const values = [fmtTime(item.checked_at), fmtMoney(item.price_cents), item.shipping_cents == null ? 'Unbekannt' : fmtMoney(item.shipping_cents), item.total_cents == null ? 'Unbekannt' : fmtMoney(item.total_cents), availabilityLabel(item.availability), item.provenance || 'Quellenbeobachtung'];
+        const fromFeed = item.provenance === 'feed';
+        const values = [`${fromFeed ? 'Feed-Abruf · ' : ''}${fmtTime(item.checked_at)}`, fmtMoney(item.price_cents), item.shipping_cents == null ? 'Unbekannt' : fmtMoney(item.shipping_cents), item.total_cents == null ? 'Unbekannt' : fmtMoney(item.total_cents), availabilityLabel(item.availability, item.provenance), item.provenance || 'Quellenbeobachtung'];
         values.forEach(value => row.append(el('td', '', value)));
         rows.append(row);
       }
@@ -389,10 +466,11 @@
     } catch (error) { rows.append(emptyTableRow(`Verlauf konnte nicht geladen werden: ${error.message}`)); showChartNote('Verlauf konnte nicht geladen werden.'); }
     historyDialog.showModal();
   }
-  function availabilityLabel(value) {
-    if (value === 'in_stock') return 'Verfügbar';
-    if (value === 'out_of_stock') return 'Nicht verfügbar';
-    return 'Unbekannt';
+  function availabilityLabel(value, provenance = '') {
+    const fromFeed = provenance === 'feed';
+    if (value === 'in_stock') return fromFeed ? 'Feed meldet verfügbar' : 'Verfügbar';
+    if (value === 'out_of_stock') return fromFeed ? 'Feed meldet nicht verfügbar' : 'Nicht verfügbar';
+    return fromFeed ? 'Feed: Verfügbarkeit unbekannt' : 'Unbekannt';
   }
   function emptyTableRow(message) { const row = document.createElement('tr'); const cell = el('td', '', message); cell.colSpan = 6; row.append(cell); return row; }
   function showChartNote(message) {

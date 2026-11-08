@@ -17,22 +17,31 @@ am offenen Watch-Formular werden bei diesen Aktualisierungen nicht überschriebe
   Verfügbarkeit, Quellenname, echten Prüfzeitpunkt und einen API-seitigen
   Veraltet-Status. Ein unbekannter Versand wird als unbekannt angezeigt und nie
   zum Artikelpreis addiert. Ein etwaiger Vergleich ist als beobachteter
-  Vergleich gekennzeichnet.
+  Vergleich gekennzeichnet. Mehrere Discovery-Treffer sind in einer zunächst
+  geschlossenen Liste einzeln mit Produktname, Händler, Angebot, Verlauf,
+  Verfügbarkeit, Quelle, Vergleich, Gutschein, Grundpreis und Zeitstatus
+  aufklappbar. Die Auswahl bleibt über automatische Aktualisierungen erhalten.
+  Feeddaten werden als Katalogabruf gekennzeichnet; Feed-Verfügbarkeit wird als
+  vom Feed gemeldet dargestellt.
 - Das Watch-Formular enthält die vollständigen `WatchInput`-Felder. Preiseingaben
   werden vor dem API-Aufruf als sichere Ganzzahl-Cents serialisiert. Beim Ändern
   wird das vollständige Formular erneut übertragen. Quell-IDs, die nicht mehr im
   aktuellen Quellenkatalog stehen, bleiben als bestehende Auswahl erhalten,
   damit eine Bearbeitung sie nicht stillschweigend löscht. Die Oberfläche
   begrenzt Synonyme auf fünf und verlangt genau eine Quelle, wenn eine Produkt-ID
-  oder Produkt-URL eingetragen wird.
+  oder Produkt-URL eingetragen wird. Exakte Beobachtungen brauchen neben dem
+  Anzeigenamen mindestens eine Suchanfrage oder Produktidentität; für den
+  Titelabgleich wird der Produktname als Suchanfrage verwendet.
 - Die Verlaufstabelle zeigt gespeicherte Beobachtungen. Das SVG-Diagramm
   zeichnet nur Datensätze mit bekanntem Gesamtpreis; bei weniger als zwei
   geeigneten Beobachtungen erklärt es, warum kein Verlauf gezeichnet wird.
 - Aktivität, Prüfprotokoll, Quellenstatus und Einstellungen stammen aus dem
   Backend. Benachrichtigungen sind bei fehlender Kanalkonfiguration als nicht
   verfügbar gekennzeichnet. Ereignisse zeigen den vom Backend gemeldeten
-  Benachrichtigungsstatus, Versuche und Fehler. BF-Modus und Scheduler-Pause
-  werden über den Einstellungsendpunkt geändert.
+  Benachrichtigungsstatus, Versuche und Fehler. Quellen unterscheiden letzte
+  Prüfung von letzter erfolgreicher Prüfung; eine bloße Konfiguration wird nicht
+  als gesunde Verbindung dargestellt. BF-Modus und Scheduler-Pause werden über
+  den Einstellungsendpunkt geändert.
 
 ## Sicherheit und Zugänglichkeit
 
