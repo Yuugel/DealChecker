@@ -313,7 +313,7 @@ async def test_discovery_preserves_good_offer_when_one_detail_is_bad(broken, cap
     bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
     pages = LocalPages({
         ALTERNATE + "/robots.txt": ROBOTS,
-        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+        ALTERNATE + "/listing.xhtml?q=Example+Radio+100":
             f'<a class="productBox" title="Example Radio" href="{bad_url}">Old Radio</a>'
             f'<a class="productBox" title="Example Radio" href="{ALTERNATE_PRODUCT}">Current Radio</a>',
         bad_url: broken,
@@ -328,7 +328,7 @@ async def test_discovery_preserves_good_offer_when_one_detail_is_bad(broken, cap
     assert len(found) == 1 and found[0].url == ALTERNATE_PRODUCT
     assert getattr(found, "skipped_pages", 0) == 1
     assert pages.calls == [ALTERNATE + "/robots.txt",
-                           ALTERNATE + "/listing.xhtml?q=Example+Radio",
+                           ALTERNATE + "/listing.xhtml?q=Example+Radio+100",
                            bad_url, ALTERNATE_PRODUCT]
     assert "übersprungen" in caplog.text
 
@@ -341,7 +341,7 @@ async def test_partial_discovery_records_warning_and_alert_without_source_backof
     bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
     pages = LocalPages({
         ALTERNATE + "/robots.txt": ROBOTS,
-        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+        ALTERNATE + "/listing.xhtml?q=Example+Radio+100":
             f'<a class="productBox" title="Example Radio" href="{bad_url}">Old Radio</a>'
             f'<a class="productBox" title="Example Radio" href="{ALTERNATE_PRODUCT}">Current Radio</a>',
         bad_url: ValueError("Quelle meldet HTTP 404; keine Weiterleitung verfolgt"),
@@ -375,7 +375,7 @@ async def test_hostwide_block_never_continues_after_failed_product(status):
     bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
     pages = LocalPages({
         ALTERNATE + "/robots.txt": ROBOTS,
-        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+        ALTERNATE + "/listing.xhtml?q=Example+Radio+100":
             f'<a class="productBox" title="Example Radio" href="{bad_url}">Old Radio</a>'
             f'<a class="productBox" title="Example Radio" href="{ALTERNATE_PRODUCT}">Current Radio</a>',
         bad_url: ValueError(f"Quelle meldet HTTP {status}; keine Weiterleitung verfolgt"),
@@ -392,7 +392,7 @@ async def test_exact_missing_page_still_fails_and_all_invalid_discovery_is_not_s
     bad_url = ALTERNATE + "/Example/Bad/html/product/234567"
     pages = LocalPages({
         ALTERNATE + "/robots.txt": ROBOTS,
-        ALTERNATE + "/listing.xhtml?q=Example+Radio":
+        ALTERNATE + "/listing.xhtml?q=Example+Radio+100":
             f'<a class="productBox" title="Example Radio" href="{bad_url}">Gone Radio</a>',
         bad_url: ValueError("Quelle meldet HTTP 404; keine Weiterleitung verfolgt"),
     })
