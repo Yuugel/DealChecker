@@ -86,7 +86,7 @@ class SafeHttpClient:
         return self._session
 
     async def _request(self, method, url, *, payload=None, allowed_hosts=None, max_body=MAX_BODY,
-                       parse_response=True):
+                       parse_response=True, text_response=False):
         if isinstance(max_body, bool) or not isinstance(max_body, int) or not 1 <= max_body <= MAX_OPT_IN_BODY:
             raise ValueError('Ungültiges Antwort-Limit')
         host = validate_url(url, allowed_hosts)
@@ -116,6 +116,11 @@ class SafeHttpClient:
                             raise ValueError('Antwort überschreitet das konfigurierte Limit')
                     if not parse_response:
                         return None
+                    if text_response:
+                        try:
+                            return data.decode('utf-8-sig')
+                        except UnicodeDecodeError:
+                            raise ValueError('Quelle liefert keinen gültigen UTF-8-Text') from None
                     try:
                         result = json.loads(data)
                     except (ValueError, UnicodeError):
@@ -134,6 +139,12 @@ class SafeHttpClient:
     async def post_json(self, url: str, payload: dict, *, allowed_hosts: set[str] | None = None):
         await self._request('POST', url, payload=payload, allowed_hosts=allowed_hosts,
                             parse_response=False)
+
+    async def get_text(self, url: str, *, allowed_hosts: set[str] | None = None,
+                       max_body: int = MAX_BODY):
+        """Bounded public HTML/robots; same DNS, HTTPS, rate and redirect guards."""
+        return await self._request('GET', url, allowed_hosts=allowed_hosts,
+                                   max_body=max_body, text_response=True)
 
     async def post_json_response(self, url: str, payload: dict, *,
                                  allowed_hosts: set[str] | None = None,
