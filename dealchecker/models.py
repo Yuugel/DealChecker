@@ -33,6 +33,7 @@ class WatchInput(BaseModel):
     target_cents: int | None = Field(default=None, ge=0, strict=True)
     max_price_cents: int | None = Field(default=None, ge=0, strict=True)
     reference_max_price_cents: int | None = Field(default=None, ge=0, strict=True)
+    amazon_prime: bool = Field(default=False, strict=True)
     priority: Literal["critical", "high", "normal", "low"] = "normal"
     interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
     black_friday_interval_seconds: int | None = Field(default=None, ge=300, le=86400, strict=True)
@@ -101,6 +102,7 @@ class Offer(BaseModel):
     pack_size: str = Field(default="", max_length=200)
     condition: Literal["new", "used", "refurbished", "unknown"] = "unknown"
     offer_type: Literal["retail", "reference"] = "retail"
+    price_basis: Literal["regular", "prime"] = "regular"
 
     @field_validator("seller", "pack_size", mode="before")
     @classmethod
@@ -124,5 +126,7 @@ class Offer(BaseModel):
         parts = [self.source, self.merchant, self.product_id, self.variant]
         if self.seller or self.pack_size or self.condition != "unknown" or self.offer_type != "retail":
             parts.extend([self.seller, self.pack_size, self.condition, self.offer_type])
+        if self.price_basis != "regular":
+            parts.extend(["price_basis", self.price_basis])
         return json.dumps(parts,
                           ensure_ascii=False, separators=(",", ":"))

@@ -97,7 +97,7 @@ def test_discovery_explicit_model_and_variant_reject_accessories_and_other_varia
 
 async def test_authorized_feed_preselection_accepts_canonical_gtin_and_reordered_words():
     from dealchecker.adapters.feed import FeedAdapter
-    row=offer().model_dump(exclude={'source','checked_at','quality','provenance','key','total_cents'})
+    row=offer().model_dump(exclude={'source','checked_at','quality','provenance','key','total_cents','price_basis'})
     class Catalog:
         async def get_json(self,*args,**kwargs): return {'offers':[row]}
     adapter=FeedAdapter(Catalog(),{'id':'shop','name':'Synthetic shop','url':'https://example.com/catalog'})

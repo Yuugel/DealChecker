@@ -4,6 +4,8 @@ Basis: gemergte PR #3, `main` bei `7919112`. Neuer Branch `feature/major-retaile
 Nach Nutzerentscheidung bleiben externe API-Konten unkonfiguriert. Kein Konto, Kauf,
 Abo, Autostart oder produktiver Benachrichtigungskanal wurde eingerichtet.
 
+Der am 9. November ergänzte **Amazon-Direktzugang mit Prime-Auswahl** ist separat [live geprüft und dokumentiert](amazon-direct.md). Die folgenden Nachweise vom 8. November bleiben als bisheriger Stand erhalten.
+
 ## Ohne API-Konto: echte Ende-zu-Ende-Prüfung
 
 `python scripts/verify_major_sources.py --output artifacts/major-live-20261108-a`

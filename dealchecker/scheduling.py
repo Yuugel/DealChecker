@@ -14,6 +14,8 @@ DISCOVERY_DEFAULT = (28800, 10800)
 
 def interval_pair(watch: dict, source_id: str | None = None, minimum: int = 0) -> tuple[int, int]:
     normal, week = DISCOVERY_DEFAULT if watch["kind"] == "discovery" else EXACT_DEFAULTS[watch["priority"]]
+    if watch["kind"] == "exact" and watch["priority"] == "normal" and source_id == "amazon":
+        normal, week = 7200, 1800
     if watch.get("interval_seconds") is not None:
         normal = watch["interval_seconds"]
     if watch.get("black_friday_interval_seconds") is not None:

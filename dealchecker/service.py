@@ -15,6 +15,8 @@ def _contains(text: str, term: str) -> bool:
 
 
 def _matches(watch: WatchInput, offer: Offer) -> bool:
+    if offer.price_basis == 'prime' and not watch.amazon_prime:
+        return False
     if watch.gtin:
         expected_gtin = canonical_gtin(watch.gtin)
         if not offer.gtin:
