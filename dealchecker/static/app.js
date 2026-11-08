@@ -322,11 +322,13 @@
     state.data = data;
     state.watchById = new Map((data.watches || []).map(w => [String(w.id), w]));
     setHealth(true, 'Lokaler Dienst bereit');
-    const apple = (data.sources || []).find(source => source.id === 'apple');
+    const sources = Array.isArray(data.sources) ? data.sources : [];
+    const failedSources = sources.filter(source => source.last_error).length;
+    const configuredSources = sources.filter(source => source.configured !== false).length;
     const coverage = byId('coverage-status');
     const coverageDot = $('.health-dot', coverage);
-    const coverageText = apple?.last_error ? 'Letzter Quellenfehler' : Number.isFinite(apple?.last_success) && apple.last_success > 0 ? `Zuletzt erfolgreich ${fmtTime(apple.last_success)}` : apple?.configured === false ? 'Nicht konfiguriert' : 'Quelle konfiguriert · noch nicht geprüft';
-    coverageDot.className = `health-dot${apple?.last_error ? ' bad' : Number.isFinite(apple?.last_success) && apple.last_success > 0 ? ' ok' : ''}`;
+    const coverageText = !sources.length ? 'Keine Quellen gemeldet' : failedSources ? `${failedSources} ${failedSources === 1 ? 'Quelle mit' : 'Quellen mit'} Fehlerstatus` : `${configuredSources} von ${sources.length} Quellen konfiguriert`;
+    coverageDot.className = `health-dot${failedSources ? ' bad' : sources.length && configuredSources === sources.length ? ' ok' : ''}`;
     coverage.lastChild.textContent = ` ${coverageText}`;
     renderStats(data); renderWatchList(data); renderActivity(data); renderSources(data); renderSettings(data);
     byId('updated-at').textContent = new Intl.DateTimeFormat('de-DE', { timeStyle: 'short' }).format(new Date());

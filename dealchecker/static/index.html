@@ -40,9 +40,9 @@
         <button class="button button-primary" id="new-watch-button" type="button"><span aria-hidden="true">＋</span> Neue Beobachtung</button>
       </section>
 
-      <section class="coverage-banner" aria-label="Abdeckung der Datenquelle">
-        <div class="coverage-icon" aria-hidden="true">A</div>
-        <div class="coverage-copy"><strong>Apple App Store · Deutschland</strong><span>Apps und Spiele · digitale Käufe · Produktpreise ohne In-App-Käufe oder Abos</span></div>
+      <section class="coverage-banner" aria-label="Quellenabdeckung">
+        <div class="coverage-icon" aria-hidden="true">◌</div>
+        <div class="coverage-copy"><strong>Quellenabdeckung</strong><span>Apple App Store Deutschland: Apps und Spiele. Modula24: physische Möbelteile und Zubehör; Versandkosten je Stück nur, wenn der Feed sie nennt.</span></div>
         <span class="coverage-pill" id="coverage-status"><span class="health-dot"></span> Status unbekannt</span>
       </section>
 
@@ -89,9 +89,9 @@
           <label class="field field-wide">Anzeigename <span class="required-mark">*</span><input id="watch-name" required maxlength="160" autocomplete="off" placeholder="z. B. Monument Valley"></label>
           <fieldset class="field field-wide kind-choice"><legend>Suchmodus</legend><label><input type="radio" name="watch-kind" value="exact" checked> Exakt <small>Ein eindeutig bestimmtes Produkt</small></label><label><input type="radio" name="watch-kind" value="discovery"> Entdecken <small>Passende Treffer zur Suchanfrage</small></label></fieldset>
           <label class="field field-wide">Suchanfrage<input id="watch-query" maxlength="300" placeholder="Titel oder Suchbegriffe"></label>
-          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Standardmäßig ist Apple App Store Deutschland ausgewählt.</small></fieldset>
+          <fieldset class="field field-wide"><legend>Quellen</legend><div id="source-options" class="checkbox-grid"></div><small class="field-help">Apple ist standardmäßig ausgewählt. Modula24 deckt nur physische Möbelteile und Zubehör ab; nutze dafür konkrete Begriffe wie „Kugel“ oder „Konnektor“.</small></fieldset>
           <label class="field">Produkt-ID<input id="watch-product-id" maxlength="160" placeholder="Track ID oder Quell-ID"></label>
-          <label class="field">Produkt-URL<input id="watch-url" type="url" maxlength="2048" placeholder="https://apps.apple.com/de/…"></label>
+          <label class="field">Produkt-URL<input id="watch-url" type="url" maxlength="2048" placeholder="App-Store- oder Modula24-Produktlink"></label>
           <label class="field">GTIN / EAN<input id="watch-gtin" maxlength="32" inputmode="numeric"></label>
           <label class="field">Modell<input id="watch-model" maxlength="160" placeholder="Modellkennung"></label>
           <label class="field">Variante<input id="watch-variant" maxlength="160" placeholder="z. B. Farbe / Größe"></label>
