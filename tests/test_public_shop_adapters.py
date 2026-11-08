@@ -173,3 +173,73 @@ async def test_page_403_pauses_further_requests_to_that_host():
     with pytest.raises(ValueError, match="pausiert"):
         await client.get_page(second)
     assert second not in pages.calls
+
+
+@pytest.mark.asyncio
+async def test_discovery_uses_ean_search_and_verifies_product_gtin():
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=4006381333931":
+            '<a href="/Example/Radio-100/html/product/123456" class="productBox">Radio</a>'
+            '<a href="/Example/Different/html/product/234567" class="productBox">Another radio</a>',
+        ALTERNATE_PRODUCT: product_page(ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456, gtin_field="gtin8"),
+        ALTERNATE + "/Example/Different/html/product/234567":
+            product_page(ALTERNATE + "/Example/Different/html/product/234567", "ALTERNATE GmbH", sku=234567),
+    })
+    watch = WatchInput(name=EXAMPLE, kind="discovery", query=GTIN, source_ids=["alternate"])
+    offer, = await AlternateAdapter(pages).search(watch)
+    assert offer.gtin == GTIN
+
+
+@pytest.mark.asyncio
+async def test_model_discovery_verifies_mpn_even_if_not_in_search_result_title():
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE + "/listing.xhtml?q=XH-Z019":
+            '<a href="/Example/Radio-100/html/product/123456" class="productBox">Radio</a>',
+        ALTERNATE_PRODUCT: product_page(
+            ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456,
+        ).replace('"RADIO-100"', '"XH-Z019"'),
+    })
+    watch = WatchInput(name=EXAMPLE, kind="discovery", query="XH-Z019", source_ids=["alternate"])
+    offer, = await AlternateAdapter(pages).search(watch)
+    assert offer.model == "XH-Z019"
+
+
+@pytest.mark.asyncio
+async def test_conditional_german_shipping_rate_stays_unknown():
+    pages = LocalPages({
+        ALTERNATE + "/robots.txt": ROBOTS,
+        ALTERNATE_PRODUCT: product_page(
+            ALTERNATE_PRODUCT, "ALTERNATE GmbH", sku=123456,
+            shipping={"shippingDestination": {"addressCountry": "DE"},
+                      "shippingRate": {"currency": "EUR", "value": 0},
+                      "eligibleTransactionVolume": {"minPrice": 99, "priceCurrency": "EUR"}},
+        ),
+    })
+    watch = WatchInput(name=EXAMPLE, source_ids=["alternate"], url=ALTERNATE_PRODUCT)
+    offer, = await AlternateAdapter(pages).lookup(watch)
+    assert offer.shipping_cents is None
+
+
+@pytest.mark.asyncio
+async def test_robots_crawl_delay_applies_to_normal_page_requests():
+    from time import monotonic
+
+    robots_url = ALTERNATE + "/robots.txt"
+    urls = [ALTERNATE + "/public/one", ALTERNATE + "/public/two"]
+
+    class TimestampedPages(LocalPages):
+        def __init__(self, pages):
+            super().__init__(pages)
+            self.timestamps = []
+
+        async def get_text(self, url, **kwargs):
+            self.timestamps.append(monotonic())
+            return await super().get_text(url, **kwargs)
+
+    pages = TimestampedPages({robots_url: ROBOTS + "Crawl-delay: 0.02\n", **dict.fromkeys(urls, "ok")})
+    client = PublicPageClient(pages, {"www.alternate.de"})
+    for url in urls:
+        assert await client.get_page(url) == "ok"
+    assert all(second - first >= 0.02 for first, second in zip(pages.timestamps, pages.timestamps[1:]))

@@ -22,6 +22,9 @@ _PERCENT = re.compile(r"%([0-9a-fA-F]{2})")
 _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _CENTS = re.compile(r"[0-9]{1,10}(?:\.[0-9]{1,2})?")
 _WORDS = re.compile(r"[^\W_]+")
+_MODEL = re.compile(r"(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9][A-Za-z0-9._/-]{2,99}")
+_DELAY = re.compile(r"[0-9]{1,5}(?:\.[0-9]{1,3})?")
+_SHIPPING_FIELDS = {"@type", "shippingDestination", "shippingRate", "deliveryTime"}
 _MAX_DETAILS = 6
 _MAX_CACHE = 96
 
@@ -38,6 +41,7 @@ def _robots_rules(text: str):
     groups = []
     agents, rules = [], []
     seen_rule = False
+    delay = 0.0
     for line in text.lstrip("\ufeff").splitlines():
         name, colon, value = line.split("#", 1)[0].partition(":")
         if not colon:
@@ -45,8 +49,8 @@ def _robots_rules(text: str):
         name, value = name.strip().lower(), value.strip()
         if name == "user-agent" and re.fullmatch(r"[A-Za-z_-]+|\*", value):
             if seen_rule:
-                groups.append((agents, rules))
-                agents, rules, seen_rule = [], [], False
+                groups.append((agents, rules, delay))
+                agents, rules, seen_rule, delay = [], [], False, 0.0
             agents.append(value.lower())
         elif agents and name in {"allow", "disallow"}:
             seen_rule = True
@@ -62,13 +66,20 @@ def _robots_rules(text: str):
             parts = tuple(part for part in pattern.split("*") if part)
             rules.append((specificity, name == "allow", parts, pattern.startswith("*"),
                           pattern.endswith("*"), end_anchor))
+        elif agents and name == "crawl-delay":
+            seen_rule = True
+            if not _DELAY.fullmatch(value):
+                raise ValueError("Ungültiger Crawl-delay in robots.txt")
+            delay = max(delay, float(value))
     if agents:
-        groups.append((agents, rules))
+        groups.append((agents, rules, delay))
     if not groups:
         raise ValueError("Keine gültige Richtlinie in robots.txt")
-    specific = [rules for agents, rules in groups if "dealchecker" in agents]
-    return tuple(rule for rules in (specific or [rules for agents, rules in groups if "*" in agents])
-                 for rule in rules)
+    specific = [(rules, delay) for agents, rules, delay in groups if "dealchecker" in agents]
+    applicable = specific or [(rules, delay) for agents, rules, delay in groups if "*" in agents]
+    return tuple(rule for rules, _ in applicable for rule in rules), max(
+        (delay for _, delay in applicable), default=0.0,
+    )
 
 
 def _matches_rule(path: str, parts, leading_star: bool, trailing_star: bool, anchored: bool) -> bool:
@@ -100,22 +111,29 @@ class PublicPageClient:
         self.hosts = set(hosts)
         self._robots = {}
         self._locks = {}
+        self._last_read = {}
+
+    async def _read(self, url: str, host: str, max_body: int, delay: float) -> str:
+        while (wait := self._last_read.get(host, -delay) + delay - monotonic()) > 0:
+            await asyncio.sleep(wait)
+        try:
+            return await self.client.get_text(url, allowed_hosts={host}, max_body=max_body)
+        finally:
+            self._last_read[host] = monotonic()
 
     async def _rules_for(self, host: str):
-        expires, rules = self._robots.get(host, (0, None))
+        expires, rules, delay = self._robots.get(host, (0, None, 0.0))
         if monotonic() >= expires:
             try:
-                robots = await self.client.get_text(
-                    f"https://{host}/robots.txt", allowed_hosts={host}, max_body=256 * 1024,
-                )
-                rules = _robots_rules(robots)
+                robots = await self._read(f"https://{host}/robots.txt", host, 256 * 1024, delay)
+                rules, delay = _robots_rules(robots)
             except ValueError as error:
-                self._robots[host] = (monotonic() + _ERROR_TTL, None)
+                self._robots[host] = (monotonic() + _ERROR_TTL, None, delay)
                 raise ValueError("robots.txt nicht verifizierbar; Quelle pausiert") from error
-            self._robots[host] = (monotonic() + _ROBOTS_TTL, rules)
+            self._robots[host] = (monotonic() + _ROBOTS_TTL, rules, delay)
         if rules is None:
             raise ValueError("robots.txt oder Website-Zugriff gesperrt; Quelle pausiert")
-        return rules
+        return rules, delay
 
     async def get_page(self, url: str, *, max_body: int = MAX_BODY) -> str:
         host = validate_url(url, self.hosts)
@@ -126,15 +144,15 @@ class PublicPageClient:
             raise ValueError("Mehrdeutiger URL-Pfad")
         path = _escaped_path((parsed.path or "/") + ("?" + parsed.query if parsed.query else ""))
         async with self._locks.setdefault(host, asyncio.Lock()):
-            rules = await self._rules_for(host)
+            rules, delay = await self._rules_for(host)
             matches = ((length, allow) for length, allow, *pattern in rules if _matches_rule(path, *pattern))
             if not max(matches, default=(0, True))[1]:
                 raise ValueError("robots.txt sperrt diese Adresse")
             try:
-                return await self.client.get_text(url, allowed_hosts={host}, max_body=max_body)
+                return await self._read(url, host, max_body, delay)
             except ValueError as error:
                 if "HTTP 403" in str(error):
-                    self._robots[host] = (monotonic() + _ERROR_TTL, None)
+                    self._robots[host] = (monotonic() + _ERROR_TTL, None, delay)
                 raise
 
 
@@ -203,6 +221,8 @@ def _money(value: object) -> int:
 
 
 def _shipping(offer: dict) -> int | None:
+    if {"eligibleQuantity", "eligibleTransactionVolume"} & offer.keys():
+        return None
     entries = offer.get("shippingDetails")
     entries = entries if isinstance(entries, list) else [entries]
     matches = []
@@ -210,9 +230,11 @@ def _shipping(offer: dict) -> int | None:
         if not isinstance(entry, dict):
             continue
         destination, rate = entry.get("shippingDestination"), entry.get("shippingRate")
-        if (isinstance(destination, dict) and destination.get("addressCountry") == "DE"
-                and not ({"addressRegion", "postalCode", "postalCodeRange"} & destination.keys())
-                and isinstance(rate, dict) and rate.get("currency") == "EUR"):
+        if isinstance(destination, dict) and destination.get("addressCountry") == "DE":
+            if (entry.keys() - _SHIPPING_FIELDS or destination.keys() - {"@type", "addressCountry"}
+                    or not isinstance(rate, dict) or rate.keys() - {"@type", "currency", "value"}
+                    or rate.get("currency") != "EUR"):
+                return None
             try:
                 matches.append(_money(rate.get("value")))
             except ValueError:
@@ -227,6 +249,20 @@ def _words(value: str) -> set[str]:
 def _includes(value: str, term: str) -> bool:
     words = _words(term)
     return bool(words) and words <= _words(value)
+
+
+def _search_term(term: str) -> str:
+    if canonical_gtin(term):
+        digits = re.sub(r"[ -]", "", term)
+        # German shop search commonly indexes an EAN-13 without the GTIN-14 padding.
+        return digits[1:] if len(digits) == 14 and digits.startswith("0") else digits
+    return term
+
+
+def _matches_term(offer: Offer, term: str) -> bool:
+    if gtin := canonical_gtin(term):
+        return canonical_gtin(offer.gtin) == gtin
+    return offer.model.casefold() == term.casefold() or _includes(f"{offer.name} {offer.variant}", term)
 
 
 def _gtin(product: dict, page_gtin: str) -> str:
@@ -351,15 +387,17 @@ class PublicShopAdapter(Adapter):
     async def _find(self, terms: list[str], *, exact: bool = False, identity: bool = False) -> list[Offer]:
         candidates = {}
         for term in dict.fromkeys(terms):
-            for url, description in await self._links(term):
-                if identity or _includes(description, term):
-                    candidates.setdefault(url, None)
+            links = await self._links(_search_term(term))
+            matching_links = [url for url, description in links if _includes(description, term)]
+            if identity or canonical_gtin(term) or (not matching_links and _MODEL.fullmatch(term)):
+                matching_links = [url for url, _ in links]
+            candidates.update(dict.fromkeys(matching_links))
         if exact and len(candidates) > _MAX_DETAILS:
             raise ValueError("Zu viele mögliche Treffer; bitte direkten Produktlink verwenden")
         offers = []
         for url in list(candidates)[:_MAX_DETAILS]:
             offer = await self._offer_at(url)
-            if identity or any(_includes(f"{offer.name} {offer.model} {offer.variant}", term) for term in terms):
+            if identity or any(_matches_term(offer, term) for term in terms):
                 offers.append(offer)
         return offers
 
@@ -381,11 +419,7 @@ class PublicShopAdapter(Adapter):
             elif watch.product_id:
                 raise ValueError("Für diese Artikelnummer wird der direkte Produktlink benötigt")
             else:
-                # The German shop search commonly indexes an EAN-13 without the GTIN-14 padding.
-                term = re.sub(r"[ -]", "", watch.gtin)
-                if len(term) == 14 and term.startswith("0"):
-                    term = term[1:]
-                offers = await self._find([term or watch.model or watch.query or watch.name], exact=True,
+                offers = await self._find([watch.gtin or watch.model or watch.query or watch.name], exact=True,
                                           identity=bool(gtin or watch.model))
         matches = [
             offer for offer in offers
