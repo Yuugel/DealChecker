@@ -20,6 +20,7 @@ class Settings:
         self.budget = budget
         self.generation = 0
         self.used = 0
+        self.delivery_postcode = ""
 
     @property
     def configured(self):
@@ -44,7 +45,7 @@ class Pages:
         action = url.removeprefix("https://api.reefapi.com")
         data = self.responses[action]
         return {"ok": True, "data": data,
-                "meta": {"api": "amazon", "endpoint": action.split("/v1/")[1],
+                "meta": {"api": action.split("/")[1], "endpoint": action.split("/v1/")[1],
                          "mode": "live", "cache_hit": False}}
 
 
@@ -137,3 +138,124 @@ async def test_reef_gateway_refuses_unapproved_endpoint_before_reserving():
         await gateway.request("/other/v1/data", {})
     assert settings.used == 0
     assert transport.calls == []
+
+
+EBAY_ID = "123456789012"
+EBAY_LINK = f"https://www.ebay.de/itm/{EBAY_ID}"
+EBAY_SEARCH = "/ebay/v1/search"
+EBAY_DETAIL = "/ebay/v1/item_detail"
+
+
+def listing(**changes):
+    return {
+        "item_id": EBAY_ID,
+        "title": "Example Gamepad",
+        "url": EBAY_LINK,
+        "price": {"value": 49.9, "currency": "EUR"},
+        "condition": "New",
+        "in_stock": True,
+        "listing_status": "active",
+        "buying_format": "buy_it_now",
+        "seller": {"username": "example-shop"},
+        "shipping": {"rate": 4.95, "currency": "EUR", "country": "DEU"},
+        "ship_to": {"country": "DEU", "country_code": "DE", "postal_code": "10115"},
+        "shipping_status": "ok",
+        "item_specifics": {"Marke": "Example", "Herstellernummer": "EX-001", "EAN": "4006381333931"},
+        **changes,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ebay_detail_preserves_seller_german_shipping_and_reported_identity():
+    from dealchecker.adapters.reef import EbayReefAdapter
+
+    transport = Pages({EBAY_DETAIL: {"item": listing()}})
+    settings = Settings()
+    settings.delivery_postcode = "10115"
+    adapter = EbayReefAdapter(ReefGateway(transport, settings))
+    watch = WatchInput(name="Example Gamepad", url=EBAY_LINK, source_ids=["ebay"], gtin="4006381333931")
+    offer, = await adapter.lookup(watch)
+    assert (offer.seller, offer.shipping_cents, offer.total_cents, offer.gtin) == (
+        "example-shop", 495, 5485, "4006381333931")
+    assert offer.condition == "new"
+    assert transport.calls[0][1]["domain"] == "de"
+
+
+@pytest.mark.asyncio
+async def test_ebay_auction_is_not_returned_as_buy_now_offer():
+    from dealchecker.adapters.reef import EbayReefAdapter
+
+    transport = Pages({EBAY_DETAIL: {"item": listing(buying_format="auction", current_bid=49.9)}})
+    adapter = EbayReefAdapter(ReefGateway(transport, Settings()))
+    watch = WatchInput(name="Example Gamepad", url=EBAY_LINK, source_ids=["ebay"])
+    with pytest.raises(ValueError, match="Sofortkauf"):
+        await adapter.lookup(watch)
+
+
+@pytest.mark.asyncio
+async def test_ebay_search_excludes_auction_and_marks_unconfirmed_seller_as_reference():
+    from dealchecker.adapters.reef import EbayReefAdapter
+
+    transport = Pages({EBAY_SEARCH: {"results": [
+        listing(buying_format_code="buy_it_now"),
+        listing(item_id="123456789013", url="https://www.ebay.de/itm/123456789013",
+                buying_format_code="auction"),
+    ]}})
+    adapter = EbayReefAdapter(ReefGateway(transport, Settings()))
+    watch = WatchInput(name="Example Gamepad", kind="discovery", query="Example Gamepad", source_ids=["ebay"])
+    offer, = await adapter.search(watch)
+    assert (offer.product_id, offer.offer_type, offer.seller, offer.total_cents) == (EBAY_ID, "reference", "", None)
+
+
+@pytest.mark.asyncio
+async def test_reef_gateway_does_not_serve_cache_past_maximum_provider_observation_age(monkeypatch):
+    from datetime import datetime, timezone
+    from dealchecker.adapters import reef
+
+    class AgedPages(Pages):
+        async def post_json_response(self, *args, **kwargs):
+            result = await super().post_json_response(*args, **kwargs)
+            result["meta"]["fetched_at"] = datetime.fromtimestamp(clock.now - 599, timezone.utc).isoformat()
+            return result
+
+    clock = SimpleNamespace(now=1794150000, tick=1000)
+    monkeypatch.setattr(reef, "time", lambda: clock.now)
+    monkeypatch.setattr(reef, "monotonic", lambda: clock.tick)
+    transport = AgedPages({DETAIL: product()})
+    gateway = ReefGateway(transport, Settings())
+    await gateway.request(DETAIL, {"asin": ASIN})
+    clock.now += 2
+    clock.tick += 2
+    await gateway.request(DETAIL, {"asin": ASIN})
+    assert len(transport.calls) == 2
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("postcode", ["", "20095"])
+async def test_ebay_does_not_use_shipping_for_default_or_wrong_postcode(postcode):
+    from dealchecker.adapters.reef import EbayReefAdapter
+
+    transport = Pages({EBAY_DETAIL: {"item": listing()}})
+    settings = Settings()
+    settings.delivery_postcode = postcode
+    adapter = EbayReefAdapter(ReefGateway(transport, settings))
+    watch = WatchInput(name="Example Gamepad", url=EBAY_LINK, source_ids=["ebay"])
+    offer, = await adapter.lookup(watch)
+    assert offer.shipping_cents is None
+    assert transport.calls[0][1].get("ship_to_postal", "") == postcode
+
+
+@pytest.mark.asyncio
+async def test_reef_gateway_rejects_sample_even_with_fresh_timestamp():
+    from datetime import datetime, timezone
+
+    class SamplePages(Pages):
+        async def post_json_response(self, *args, **kwargs):
+            result = await super().post_json_response(*args, **kwargs)
+            result["meta"].update(mode="sample", fetched_at=datetime.now(timezone.utc).isoformat())
+            return result
+
+    gateway = ReefGateway(SamplePages({DETAIL: product()}), Settings())
+    with pytest.raises(ValueError, match="Live"):
+        await gateway.request(DETAIL, {"asin": ASIN})

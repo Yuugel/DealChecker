@@ -5,10 +5,11 @@ import asyncio
 from collections import OrderedDict
 from copy import deepcopy
 from datetime import datetime
+from html import unescape
 import json
 import re
 from time import monotonic, time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from dealchecker.identity import canonical_gtin, matches_product_term
 from dealchecker.models import Offer
@@ -20,13 +21,12 @@ from .public_pages import _money, _text
 _HOST = "api.reefapi.com"
 _AMAZON_DETAIL = "/amazon/v1/product/detail"
 _AMAZON_SEARCH = "/amazon/v1/search"
+_EBAY_DETAIL = "/ebay/v1/item_detail"
+_EBAY_SEARCH = "/ebay/v1/search"
 _COSTS = {
     _AMAZON_DETAIL: 2,
-    "/amazon/v1/product/offers": 2,
-    "/ebay/v1/search": 1,
-    "/ebay/v1/item_detail": 2,
-    "/mediamarkt/v1/search": 2,
-    "/mediamarkt/v1/product/detail": 2,
+    _EBAY_SEARCH: 1,
+    _EBAY_DETAIL: 2,
 }
 _MAX_SEARCH = 5
 _MAX_CACHE = 48
@@ -34,6 +34,9 @@ _CACHE_SECONDS = 600
 _MAX_BODY = 512 * 1024
 _ASIN = re.compile(r"[A-Z0-9]{10}")
 _AMAZON_PATH = re.compile(r"/(?:(?:[^/]+/)?dp|gp/product)/([A-Z0-9]{10})(?:/ref=[^/]+)?/?", re.I)
+_EBAY_ID = re.compile(r"[0-9]{12}")
+_EBAY_PATH = re.compile(r"/itm/(?:[^/]+/)?([0-9]{12})/?")
+_POSTCODE = re.compile(r"[0-9]{5}")
 
 
 class ReefGateway:
@@ -66,7 +69,9 @@ class ReefGateway:
             generation = self.settings.generation
             key = (generation, endpoint, encoded)
             cached = self._cache.get(key)
-            if cached is not None and monotonic() < cached[0]:
+            now = time()
+            if (cached is not None and monotonic() < cached[0]
+                    and now - _CACHE_SECONDS <= cached[2] <= now + 60):
                 self._cache.move_to_end(key)
                 return deepcopy(cached[1]), cached[2]
             self.settings.reserve(cost)
@@ -77,7 +82,8 @@ class ReefGateway:
             if generation != self.settings.generation:
                 raise ValueError("ReefAPI-Schlüssel wurde während der Abfrage geändert")
             data, observed_at = self._read_response(endpoint, response)
-            self._cache[key] = (monotonic() + _CACHE_SECONDS, data, observed_at)
+            remaining = max(0, min(_CACHE_SECONDS, observed_at + _CACHE_SECONDS - time()))
+            self._cache[key] = (monotonic() + remaining, data, observed_at)
             self._cache.move_to_end(key)
             if len(self._cache) > _MAX_CACHE:
                 self._cache.popitem(last=False)
@@ -92,9 +98,11 @@ class ReefGateway:
         if (not isinstance(meta, dict) or not isinstance(data, (dict, list))
                 or meta.get("api") != api or meta.get("endpoint") != action):
             raise ValueError("ReefAPI-Antwort passt nicht zum angefragten Endpunkt")
+        if meta.get("mode") != "live":
+            raise ValueError("ReefAPI liefert keinen Live-Abruf")
         received = time()
         timestamp = meta.get("fetched_at")
-        if timestamp is None and meta.get("mode") == "live" and meta.get("cache_hit") is False:
+        if timestamp is None and meta.get("cache_hit") is False:
             # The observed live provider response can omit its own timestamp.
             return data, received
         try:
@@ -208,6 +216,8 @@ class AmazonReefAdapter(Adapter):
     async def search(self, watch) -> list[Offer]:
         if watch.kind != "discovery" or not watch.query:
             raise ValueError("Amazon-Suche erfordert einen Suchbegriff")
+        if watch.gtin or watch.model or watch.variant or canonical_gtin(watch.query):
+            raise ValueError("Für bestätigte Amazon-Produktmerkmale bitte den direkten Produktlink verwenden")
         results = {}
         candidates = set()
         for term in dict.fromkeys([watch.query, *watch.synonyms]):
@@ -226,7 +236,7 @@ class AmazonReefAdapter(Adapter):
                     continue
                 candidates.add(asin)
                 # A search grid has no verified seller, variant or shipping.
-                if watch.gtin or watch.model or watch.variant or canonical_gtin(term):
+                if canonical_gtin(term):
                     continue
                 try:
                     offer = Offer(
@@ -238,8 +248,6 @@ class AmazonReefAdapter(Adapter):
                     continue
                 if matches_product_term(offer, term):
                     results[asin] = offer
-        if (watch.gtin or watch.model or watch.variant or canonical_gtin(watch.query)) and candidates:
-            raise ValueError("Für bestätigte Amazon-Produktmerkmale bitte den direkten Produktlink verwenden")
         return list(results.values())
 
     async def lookup(self, watch) -> list[Offer]:
@@ -256,4 +264,194 @@ class AmazonReefAdapter(Adapter):
         offer = await self._details(asin)
         if not _verified_identity(watch, offer):
             raise ValueError("ReefAPI kann die gewünschte Amazon-Produktidentität nicht bestätigen")
+        return [offer]
+
+
+def _ebay_id(value: object) -> str:
+    if not isinstance(value, str) or not _EBAY_ID.fullmatch(value):
+        raise ValueError("Ungültige eBay-Artikelnummer")
+    return value
+
+
+def _ebay_listing_id(url: str) -> str:
+    safe_https_url(url, hosts=set(EbayReefAdapter.url_hosts))
+    parsed = urlsplit(url)
+    path = unquote(parsed.path, errors="strict")
+    if (path.count("/") != parsed.path.count("/") or "\\" in path
+            or any(part in {".", ".."} for part in path.split("/"))
+            or any(ord(char) < 32 for char in path)
+            or not (match := _EBAY_PATH.fullmatch(path))):
+        raise ValueError("eBay-Link ist keine direkte deutsche Artikelseite")
+    if {key.lower() for key in parse_qs(parsed.query, keep_blank_values=True)} & {"var", "variation", "variationid"}:
+        raise ValueError("ReefAPI bestätigt die gewählte eBay-Variante im Direktlink nicht")
+    return _ebay_id(match[1])
+
+
+def _ebay_price(item: dict) -> int:
+    price = item.get("price")
+    if not isinstance(price, dict) or price.get("currency") != "EUR":
+        raise ValueError("eBay-Angebot ist nicht eindeutig in EUR ausgezeichnet")
+    raw = _text(price.get("raw")).casefold()
+    if re.search(r"\b(?:ab|bis|from|to)\b", raw) or price.get("max") is not None:
+        raise ValueError("eBay-Angebot nennt nur einen Mindestpreis oder eine Preisspanne")
+    return _money(price.get("value"))
+
+
+def _ebay_condition(value: object) -> str:
+    name = _text(value).casefold()
+    if name in {"neu", "new", "brand new"}:
+        return "new"
+    if name in {"gebraucht", "used", "pre-owned"}:
+        return "used"
+    return "refurbished" if "refurbished" in name else "unknown"
+
+
+def _ebay_stock(item: dict) -> str:
+    if item.get("listing_status") in {"ended", "sold", "expired"}:
+        return "out_of_stock"
+    end = item.get("end_time")
+    if end is not None:
+        try:
+            expires = datetime.fromisoformat(end)
+            if expires.tzinfo is None:
+                return "unknown"
+            if expires.timestamp() <= time():
+                return "out_of_stock"
+        except (TypeError, ValueError, OverflowError, OSError):
+            return "unknown"
+    availability = _text(item.get("availability")).casefold()
+    if availability in {"outofstock", "soldout"} or item.get("in_stock") is False:
+        return "out_of_stock"
+    if item.get("listing_status") == "active" and (availability == "instock" or item.get("in_stock") is True):
+        return "in_stock"
+    return "unknown"
+
+
+def _ebay_shipping(item: dict, postcode: str) -> int | None:
+    shipping, destination = item.get("shipping"), item.get("ship_to")
+    if (not postcode or not isinstance(shipping, dict) or not isinstance(destination, dict)
+            or item.get("shipping_status") != "ok" or shipping.get("currency") != "EUR"
+            or shipping.get("country") not in {"DE", "DEU"} or destination.get("country") not in {"DE", "DEU"}
+            or destination.get("country_code") != "DE" or destination.get("postal_code") != postcode):
+        return None
+    try:
+        return _money(shipping.get("rate"))
+    except ValueError:
+        return None
+
+
+def _ebay_buying_format(item: dict) -> str:
+    return _text(item.get("buying_format_code") or item.get("buying_format")).casefold()
+
+
+_FIXED_PRICE = {"buy_it_now", "fixed_price", "sofort-kaufen", "buy it now"}
+
+
+class EbayReefAdapter(Adapter):
+    id = "ebay"
+    name = "eBay (ReefAPI)"
+    description = "eBay DE über optionalen ReefAPI-Zugang; Sofortkaufpreise, Versand zur eingestellten PLZ"
+    min_interval_seconds = 1800
+    supports_search = True
+    url_hosts = ("www.ebay.de", "ebay.de")
+
+    def __init__(self, gateway: ReefGateway):
+        self.gateway = gateway
+
+    @property
+    def configured(self) -> bool:
+        return self.gateway.configured
+
+    def _postal_parameters(self) -> tuple[dict, str]:
+        postcode = self.gateway.settings.delivery_postcode
+        if not postcode:
+            return {}, ""
+        if not _POSTCODE.fullmatch(postcode):
+            raise ValueError("Ungültige deutsche Liefer-PLZ für eBay")
+        return {"ship_to_postal": postcode}, postcode
+
+    async def search(self, watch) -> list[Offer]:
+        if watch.kind != "discovery" or not watch.query:
+            raise ValueError("eBay-Suche erfordert einen Suchbegriff")
+        if watch.gtin or watch.model or watch.variant or canonical_gtin(watch.query):
+            raise ValueError("Für bestätigte eBay-Produktmerkmale bitte den direkten Artikellink verwenden")
+        postal_parameters, _ = self._postal_parameters()
+        results = {}
+        for term in dict.fromkeys([watch.query, *watch.synonyms]):
+            remaining = _MAX_SEARCH - len(results)
+            if not remaining:
+                break
+            data, observed = await self.gateway.request(
+                _EBAY_SEARCH, {"query": term, "domain": "de", "max_results": remaining,
+                               "buy_it_now": True, **postal_parameters},
+            )
+            rows = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(rows, list) or len(rows) > remaining:
+                raise ValueError("ReefAPI-eBay-Suche liefert ein ungültiges Ergebnis")
+            for row in rows:
+                if not isinstance(row, dict) or _ebay_buying_format(row) not in _FIXED_PRICE:
+                    continue
+                try:
+                    item_id = _ebay_id(row.get("item_id"))
+                    if _ebay_listing_id(row.get("url")) != item_id:
+                        continue
+                    offer = Offer(
+                        source=self.id, merchant="eBay.de", product_id=item_id,
+                        name=_text(row.get("title"))[:300], url=f"https://www.ebay.de/itm/{item_id}",
+                        price_cents=_ebay_price(row), shipping_cents=None, availability="unknown",
+                        condition=_ebay_condition(row.get("condition")), checked_at=observed, offer_type="reference",
+                    )
+                except ValueError:
+                    continue
+                if matches_product_term(offer, term):
+                    results.setdefault(item_id, offer)
+        return list(results.values())
+
+    async def lookup(self, watch) -> list[Offer]:
+        if watch.kind != "exact":
+            raise ValueError("eBay-Abfrage erfordert eine exakte Artikelüberwachung")
+        item_id = _ebay_listing_id(watch.url) if watch.url else None
+        if watch.product_id:
+            product_id = _ebay_id(watch.product_id)
+            if item_id and item_id != product_id:
+                raise ValueError("eBay-Link und Artikelnummer widersprechen sich")
+            item_id = product_id
+        if not item_id:
+            raise ValueError("Für exakte eBay-Überwachung bitte einen Artikellink oder eine Artikelnummer angeben")
+        postal_parameters, postcode = self._postal_parameters()
+        data, observed = await self.gateway.request(
+            _EBAY_DETAIL, {"item_id": item_id, "domain": "de", "include_description": False, **postal_parameters},
+        )
+        item = data.get("item") if isinstance(data, dict) else None
+        if (not isinstance(item, dict) or item.get("item_id") != item_id
+                or _ebay_listing_id(item.get("url")) != item_id):
+            raise ValueError("ReefAPI-Angebot widerspricht der angefragten eBay-Artikelnummer")
+        buying_format = _ebay_buying_format(item)
+        if "auction" in buying_format or "auktion" in buying_format or item.get("current_bid") is not None:
+            raise ValueError("eBay-Auktion liefert keinen bestätigten Sofortkaufpreis")
+        # eBay limits multi-quantity listings of identical items to fixed-price format.
+        quantity = item.get("quantity_available")
+        fixed_price = buying_format in _FIXED_PRICE or (type(quantity) is int and quantity > 1)
+        specifics = item.get("item_specifics")
+        specifics = specifics if isinstance(specifics, dict) else {}
+        brand = _text(item.get("brand")) or _text(specifics.get("Marke"))
+        model = (_text(item.get("mpn")) or _text(specifics.get("Herstellernummer"))
+                 or _text(item.get("model")) or _text(specifics.get("Modell")))
+        seller = item.get("seller")
+        seller = (_text(seller.get("name")) or _text(seller.get("username"))) if isinstance(seller, dict) else ""
+        category = item.get("category_path")
+        title = re.sub(r"<wbr\s*/?>", "", _text(item.get("title")), flags=re.I)
+        offer = Offer(
+            source=self.id, merchant="eBay.de", seller=seller, product_id=item_id,
+            name=unescape(title)[:300], url=f"https://www.ebay.de/itm/{item_id}",
+            price_cents=_ebay_price(item), shipping_cents=_ebay_shipping(item, postcode) if fixed_price else None,
+            checked_at=observed, availability=_ebay_stock(item),
+            condition=_ebay_condition(item.get("condition")), offer_type="retail" if fixed_price else "reference",
+            gtin=_product_gtin({"ean": specifics.get("EAN"), "gtin": item.get("gtin")}),
+            variant=_text(specifics.get("Farbe")), manufacturer=brand,
+            model="" if model.casefold() in {"n/a", "nicht zutreffend"} else model,
+            category=_text(category[-1]) if isinstance(category, list) and category else "",
+        )
+        if not _verified_identity(watch, offer):
+            raise ValueError("ReefAPI kann die gewünschte eBay-Artikelidentität nicht bestätigen")
         return [offer]
