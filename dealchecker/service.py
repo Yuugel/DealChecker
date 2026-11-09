@@ -3,7 +3,7 @@ import asyncio
 import statistics
 import time
 
-from .db import Database, FEED_FRESH_SECONDS, interval
+from .db import Database, FEED_FRESH_SECONDS, interval, item_alert_key
 from .models import Offer, WatchInput
 from .identity import canonical_gtin, matches_product_term
 
@@ -64,12 +64,26 @@ def _matches(watch: WatchInput, offer: Offer) -> bool:
 
 def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: int | None,
               interval_seconds: int, now: float):
-    previous = [h["total_cents"] for h in history if h["total_cents"] is not None and h["availability"] == "in_stock"]
+    # Never compare an item-only price to a delivered total, even if a
+    # retailer starts or stops publishing shipping costs for the same offer.
+    item_only = (offer.shipping_cents is None and watch.alert_on_item_price
+                 and offer.offer_type == "retail")
+    amount = offer.price_cents if item_only else offer.total_cents
+    previous = [
+        h["price_cents"] if item_only else h["total_cents"]
+        for h in history
+        if h["availability"] == "in_stock"
+        and (h["total_cents"] is None if item_only else h["total_cents"] is not None)
+    ]
     comparison = min(previous) if previous else None
-    savings = max(0, comparison - offer.total_cents) if comparison is not None and offer.total_cents is not None else None
+    savings = max(0, comparison - amount) if comparison is not None and amount is not None else None
     if offer.offer_type == "reference":
         return "Referenzpreis", comparison, None, None
-    if offer.total_cents is None or offer.availability != "in_stock":
+    if amount is None:
+        # Unknown shipping without opt-in cannot borrow a historical total
+        # and present that total as an article-price comparison.
+        return "Unzureichende Daten", None, None, None
+    if offer.availability != "in_stock":
         return "Unzureichende Daten", comparison, savings, None
     fresh = now - offer.checked_at <= 2 * interval_seconds and offer.checked_at <= now + 60 and offer.quality != "feed_stale"
     if offer.provenance == "feed" and now - offer.checked_at > FEED_FRESH_SECONDS:
@@ -79,18 +93,22 @@ def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: 
     if not fresh:
         return "Veraltete Daten", comparison, savings, None
     reason = None
-    if watch.target_cents is not None and offer.total_cents <= watch.target_cents:
+    if watch.target_cents is not None and amount <= watch.target_cents:
         reason = "Wunschpreis erreicht"
-    elif comparison is not None and offer.total_cents < comparison:
+    elif comparison is not None and amount < comparison:
         reason = "Neuer Bestpreis"
-    elif len(previous) >= 3 and statistics.median(previous) > 0 and offer.total_cents < statistics.median(previous) and offer.total_cents <= .9 * statistics.median(previous):
+    elif len(previous) >= 3 and statistics.median(previous) > 0 and amount < statistics.median(previous) and amount <= .9 * statistics.median(previous):
         reason = "Sehr gutes Angebot"
-    elif previous and previous[-1] > 0 and offer.total_cents < previous[-1] and offer.total_cents <= .95 * previous[-1]:
+    elif previous and previous[-1] > 0 and amount < previous[-1] and amount <= .95 * previous[-1]:
         reason = "Interessanter Preisrückgang"
     evaluation = reason or ("Unzureichende Daten" if not history else "Kein relevantes Angebot")
     if reason and last_alert is not None:
-        if offer.total_cents >= last_alert or (previous and offer.total_cents >= previous[-1]):
+        if amount >= last_alert or (previous and amount >= previous[-1]):
             reason = None
+    if item_only:
+        evaluation = "Artikelpreis: " + evaluation
+        if reason:
+            reason = "Artikelpreis: " + reason
     return evaluation, comparison, savings, reason
 
 
@@ -221,7 +239,10 @@ class Engine:
             errors.append("exact product not found")
         observations = []
         for item in unique.values():
-            history, last_alert, _ = self.db.prior(id, item.key)
+            item_only = (item.shipping_cents is None and watch.alert_on_item_price
+                         and item.offer_type == "retail")
+            history, last_alert, _ = self.db.prior(
+                id, item.key, alert_key=item_alert_key(item.key) if item_only else None)
             minimum = max(schedules[item.source]["min_interval_seconds"], outcomes[item.source][1])
             cadence = interval(row, self.db.get_settings(), item.source, minimum, now)
             observations.append((item, *_evaluate(watch, item, history, last_alert, cadence, now)))

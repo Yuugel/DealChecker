@@ -47,7 +47,7 @@ async def resolve_link(url: str, registry: dict, *, amazon_prime: bool = False) 
     if any(o.offer_type == 'reference' for o in offers):
         warnings.append('Preisreferenz ohne bestätigtes Händlerangebot: kein Kaufpreisalarm.')
     if any(o.shipping_cents is None for o in offers):
-        warnings.append('Versand unbekannt: kein bestätigter Gesamtpreis und kein Kaufpreisalarm.')
+        warnings.append('Versand unbekannt: kein bestätigter Gesamtpreis. Artikelpreis-Alarme können beim Speichern optional aktiviert werden.')
     if any(o.availability != 'in_stock' for o in offers):
         warnings.append('Mindestens ein Treffer ist nicht als lieferbar bestätigt.')
     return {'source_id': adapter.id, 'source_name': adapter.name, 'amazon_prime': amazon_prime,

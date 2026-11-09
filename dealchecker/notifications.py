@@ -18,17 +18,20 @@ class DiscordNotifier:
         self.webhook_url = webhook_url
 
     async def send(self, event: dict) -> None:
-        total = event["total_cents"]
-        price = f"{total // 100},{total % 100:02d} €"
-        lines = [f"{event['reason']}: {event.get('product', event.get('name', 'Produkt'))} — {price} bei {event['merchant']}"]
+        amount = event.get("alert_cents", event.get("total_cents"))
+        price = f"{amount // 100},{amount % 100:02d} €"
+        item_only = event.get("price_scope") == "item"
+        price_label = "Artikelpreis (Versandkosten unbekannt; Gesamtpreis offen)" if item_only else "Gesamtpreis"
+        lines = [f"{event['reason']}: {event.get('product', event.get('name', 'Produkt'))} — {price} {price_label} bei {event['merchant']}"]
         if event.get('price_basis') == 'prime':
             lines.append('Prime-Preis · Amazon-Prime-Mitgliedschaft erforderlich')
         if event.get("comparison_cents") is not None:
             cents = event["comparison_cents"]
-            lines.append(f"Bisher beobachteter Vergleichspreis: {cents // 100},{cents % 100:02d} €")
+            label = "Bisher beobachteter Artikelpreis" if item_only else "Bisher beobachteter Gesamtpreis"
+            lines.append(f"{label}: {cents // 100},{cents % 100:02d} €")
         if event.get("savings_cents") is not None:
             cents = event["savings_cents"]
-            lines.append(f"Preisunterschied zur eigenen Historie: {cents // 100},{cents % 100:02d} €")
+            lines.append(f"Preisunterschied zur eigenen {('Artikelpreis-' if item_only else 'Gesamtpreis-')}Historie: {cents // 100},{cents % 100:02d} €")
         observed = datetime.fromtimestamp(event["checked_at"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         availability = event["availability"]
         if availability == "in_stock":

@@ -5,7 +5,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const byId = (id) => document.getElementById(id);
   const API = '/api';
-  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, notificationConfigBusy: false, notificationFeedback: '', reefConfigBusy: false, reefFeedback: '', reefDailyDraft: null, reefPostcodeDraft: null, search: '', expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
+  const state = { data: null, watchById: new Map(), loading: false, formBusy: false, settingsBusy: false, notificationConfigBusy: false, notificationFeedback: '', reefConfigBusy: false, reefFeedback: '', reefDailyDraft: null, reefPostcodeDraft: null, search: '', showUnknownShipping: true, expandedWatches: new Set(), sourceIntervalDraft: {}, bfDurationDraft: 86400 };
   const dialog = byId('watch-dialog');
   const resolveDialog = byId('resolve-dialog');
 
@@ -154,7 +154,8 @@
       const copy = el('div', 'product-copy');
       copy.append(el('strong', '', watch.name || 'Ohne Namen'));
       const sourceNames = (watch.source_ids || []).map(id => (data.sources || []).find(s => s.id === id)?.name || id).join(', ');
-      const watchOffers = (offersByWatch.get(String(watch.id)) || []).slice().sort((a, b) => {
+      const storedWatchOffers = offersByWatch.get(String(watch.id)) || [];
+      const watchOffers = storedWatchOffers.filter(item => state.showUnknownShipping || item.shipping_cents != null).slice().sort((a, b) => {
         const staleOrder = Number(!!a.stale) - Number(!!b.stale);
         if (staleOrder) return staleOrder;
         const availabilityOrder = Number(a.availability !== 'in_stock') - Number(b.availability !== 'in_stock');
@@ -179,22 +180,23 @@
           priceBox.append(el('span', 'current-price reference-price', `Referenzpreis ${fmtMoney(offer.price_cents, offer.currency)}`));
           priceBox.append(el('small', 'price-detail', 'Versand/Händler unbekannt · kein Gesamtpreisalarm'));
         } else {
-        const totalLabel = offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency);
+        const totalLabel = offer.total_cents == null ? `${fmtMoney(offer.price_cents, offer.currency)} Artikelpreis` : fmtMoney(offer.total_cents, offer.currency);
         const headlinePrice = offer.stale ? `Veraltet · ${totalLabel}` : watchOffers.length > 1 && offer.total_cents != null ? `Ab ${totalLabel}` : totalLabel;
         priceBox.append(el('span', 'current-price', headlinePrice));
         let detail = `${fmtMoney(offer.price_cents, offer.currency)} ${offer.price_basis === 'prime' ? 'Prime-Artikelpreis' : offer.source === 'amazon' ? 'regulärer Artikelpreis' : 'Artikel'}`;
-        detail += offer.shipping_cents == null ? ' · Versand unbekannt' : offer.shipping_cents === 0 ? ' · Versand inklusive' : ` · + ${fmtMoney(offer.shipping_cents, offer.currency)} Versand`;
+        detail += offer.shipping_cents == null ? ' · Versand unbekannt · Gesamtpreis offen' : offer.shipping_cents === 0 ? ' · Versand inklusive' : ` · + ${fmtMoney(offer.shipping_cents, offer.currency)} Versand`;
         if (Number.isInteger(offer.comparison_cents) && offer.comparison_cents >= 0) {
-          detail += ` · beobachteter Vergleich ${fmtMoney(offer.comparison_cents, offer.currency)}`;
+          detail += ` · beobachteter ${offer.shipping_cents == null ? 'Artikelpreis-' : 'Gesamtpreis-'}Vergleich ${fmtMoney(offer.comparison_cents, offer.currency)}`;
           if (Number.isInteger(offer.savings_cents) && offer.savings_cents > 0) detail += ` · ${fmtMoney(offer.savings_cents, offer.currency)} darunter`;
         }
         const details = el('small', 'price-detail', detail);
         priceBox.append(details);
         }
       } else {
-        priceBox.append(el('span', 'current-price', 'Noch kein Angebot'), el('small', 'price-detail', watch.last_error ? 'Letzte Prüfung mit Fehler' : watch.last_checked ? 'Letzte Prüfung ohne passende Treffer' : 'Wird nach erster Prüfung angezeigt'));
+        const filteredOut = !state.showUnknownShipping && storedWatchOffers.length > 0;
+        priceBox.append(el('span', 'current-price', filteredOut ? 'Angebote ausgeblendet' : 'Noch kein Angebot'), el('small', 'price-detail', filteredOut ? 'Filter: Versandkosten unbekannt' : watch.last_error ? 'Letzte Prüfung mit Fehler' : watch.last_checked ? 'Letzte Prüfung ohne passende Treffer' : 'Wird nach erster Prüfung angezeigt'));
       }
-      const status = el('span', `offer-state ${offer ? offerState(offer)[0] : 'warn'}`, offer ? offerState(offer)[1] : (watch.paused ? 'Pausiert' : watch.last_error ? 'Quellenfehler' : watch.last_checked ? 'Keine passenden Treffer' : 'Noch nicht geprüft'));
+      const status = el('span', `offer-state ${offer ? offerState(offer)[0] : 'warn'}`, offer ? offerState(offer)[1] : (!state.showUnknownShipping && storedWatchOffers.length ? 'Gefiltert' : watch.paused ? 'Pausiert' : watch.last_error ? 'Quellenfehler' : watch.last_checked ? 'Keine passenden Treffer' : 'Noch nicht geprüft'));
       const actions = el('div', 'watch-actions');
       const check = el('button', 'small-action', 'Prüfen'); check.type = 'button'; check.setAttribute('aria-label', `${watch.name}: Jetzt prüfen`); check.disabled = !!watch.running || !!watch.paused || !!data.settings?.paused; check.title = check.disabled ? (watch.paused || data.settings?.paused ? 'Prüfungen sind pausiert' : 'Prüfung läuft bereits') : 'Jetzt manuell prüfen'; check.addEventListener('click', () => manualCheck(watch, check));
       const historyButton = el('button', 'small-action', 'Verlauf'); historyButton.type = 'button'; historyButton.setAttribute('aria-label', `${watch.name}: Preisverlauf anzeigen`); historyButton.disabled = !offer; historyButton.addEventListener('click', () => showHistory(offer, watch));
@@ -211,6 +213,7 @@
       left.append(age);
       if (watch.last_error) left.append(el('span', 'meta-item stale', `Letzter Fehler: ${watch.last_error}`));
       if (watch.amazon_prime && watch.source_ids.includes('amazon')) left.append(el('span', 'meta-item', 'Prime-Preise bevorzugt'));
+      if (watch.alert_on_item_price) left.append(el('span', 'meta-item', 'Artikelpreis-Alarme bei unbekanntem Versand erlaubt'));
       if (watch.target_cents != null) left.append(el('span', 'meta-item', `Wunschpreis ${fmtMoney(watch.target_cents)}`));
       if (watch.max_price_cents != null) left.append(el('span', 'meta-item', `Limit ${fmtMoney(watch.max_price_cents)}`));
       if (watch.reference_max_price_cents != null) left.append(el('span', 'meta-item', `Referenzbudget ${fmtMoney(watch.reference_max_price_cents)} · Artikelpreis`));
@@ -285,7 +288,7 @@
     heading.append(title);
     const actions = el('div', 'individual-offer-actions');
     const exact = el('button', 'small-action', 'Exakt beobachten'); exact.type = 'button';
-    exact.addEventListener('click', () => openWatchEditor(null, { ...offer, amazon_prime: watch.amazon_prime }));
+    exact.addEventListener('click', () => openWatchEditor(null, { ...offer, amazon_prime: watch.amazon_prime, alert_on_item_price: watch.alert_on_item_price }));
     actions.append(exact);
     const history = el('button', 'small-action', 'Verlauf');
     history.type = 'button';
@@ -300,7 +303,7 @@
     }
     heading.append(actions);
     const price = el('div', 'individual-offer-price');
-    price.append(el('strong', reference ? 'offer-total reference-price' : 'offer-total', reference ? `Referenzpreis ${fmtMoney(offer.price_cents, offer.currency)}` : offer.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(offer.total_cents, offer.currency)));
+    price.append(el('strong', reference ? 'offer-total reference-price' : 'offer-total', reference ? `Referenzpreis ${fmtMoney(offer.price_cents, offer.currency)}` : offer.total_cents == null ? `${fmtMoney(offer.price_cents, offer.currency)} Artikelpreis` : fmtMoney(offer.total_cents, offer.currency)));
     if (!reference) {
       price.append(el('span', '', `${fmtMoney(offer.price_cents, offer.currency)} Artikel`));
       price.append(el('span', '', offer.shipping_cents == null ? 'Versand unbekannt' : `Versand ${fmtMoney(offer.shipping_cents, offer.currency)}`));
@@ -309,7 +312,7 @@
     chips.append(el('span', 'meta-chip', availabilityLabel(offer.availability, offer.provenance)));
     if (offer.price_basis === 'prime') chips.append(el('span', 'meta-chip', 'Prime-Preis · Mitgliedschaft erforderlich'));
     else if (offer.source === 'amazon') chips.append(el('span', 'meta-chip', 'Regulärer Preis'));
-    if (offer.shipping_cents == null && !reference) chips.append(el('span', 'meta-chip', 'Kein Gesamtpreisalarm · Versand unbekannt'));
+    if (offer.shipping_cents == null && !reference) chips.append(el('span', 'meta-chip', watch.alert_on_item_price ? 'Versand unbekannt · nur Artikelpreis-Alarme' : 'Versand unbekannt · kein Kaufpreisalarm'));
     if (offer.seller) chips.append(el('span', 'meta-chip', `Verkäufer: ${offer.seller}`));
     if (offer.pack_size) chips.append(el('span', 'meta-chip', `Packung: ${offer.pack_size}`));
     if (conditionLabel(offer.condition)) chips.append(el('span', 'meta-chip', `Zustand: ${conditionLabel(offer.condition)}`));
@@ -318,7 +321,7 @@
     const fromFeed = offer.provenance === 'feed' || offer.quality === 'feed_reported';
     chips.append(el('span', `meta-chip${offer.stale ? ' stale' : ''}`, `${offer.stale ? 'Veraltet · ' : ''}${fromFeed ? 'Katalogdaten · ' : ''}${ageText(offer.checked_at)}`));
     chips.append(el('span', 'meta-chip', `${fromFeed ? 'Feed-Zeitpunkt' : 'Geprüft'}: ${fmtTime(offer.checked_at)}`));
-    if (Number.isInteger(offer.comparison_cents)) chips.append(el('span', 'meta-chip', `Beobachteter Vergleich ${fmtMoney(offer.comparison_cents, offer.currency)}`));
+    if (Number.isInteger(offer.comparison_cents)) chips.append(el('span', 'meta-chip', `Beobachteter ${offer.shipping_cents == null && !reference ? 'Artikelpreis-' : 'Gesamtpreis-'}Vergleich ${fmtMoney(offer.comparison_cents, offer.currency)}`));
     if (Number.isInteger(offer.savings_cents)) chips.append(el('span', 'meta-chip', `Ersparnis ${fmtMoney(offer.savings_cents, offer.currency)}`));
     if (offer.coupon) chips.append(el('span', 'meta-chip offer-extra', `Gutschein: ${offer.coupon}`));
     if (offer.unit_price) chips.append(el('span', 'meta-chip offer-extra', `Grundpreis: ${offer.unit_price}`));
@@ -334,8 +337,10 @@
       const row = el('div', 'activity-row');
       const name = event.name || event.product || 'Preisereignis';
       row.append(el('strong', '', name));
-      row.append(el('span', 'activity-value', event.total_cents == null ? 'Gesamt unbekannt' : fmtMoney(event.total_cents)));
-      let eventDetail = `${event.reason || 'Beobachtet'}${event.price_basis === 'prime' ? ' · Prime-Preis' : ''} · ${fmtTime(event.checked_at || event.created_at)}`;
+      const itemAlert = event.price_scope === 'item';
+      const eventAmount = Number.isInteger(event.alert_cents) ? event.alert_cents : event.total_cents;
+      row.append(el('span', 'activity-value', eventAmount == null ? 'Preis unbekannt' : `${fmtMoney(eventAmount)} ${itemAlert ? 'Artikelpreis' : 'Gesamt'}`));
+      let eventDetail = `${event.reason || 'Beobachtet'}${itemAlert ? ' · Versand unbekannt, Gesamtpreis offen' : ''}${event.price_basis === 'prime' ? ' · Prime-Preis' : ''} · ${fmtTime(event.checked_at || event.created_at)}`;
       if (event.notification_error) eventDetail += ` · ${event.notification_status === 'sent' ? 'Letzter Benachrichtigungsfehler' : 'Benachrichtigung: erneuter Versuch ausstehend'}${event.notification_attempts ? ` nach ${event.notification_attempts} Versuchen` : ''}: ${event.notification_error}`;
       else if (event.notification_status === 'pending') eventDetail += ' · Benachrichtigung ausstehend';
       else if (event.notification_status === 'sent') eventDetail += ' · Benachrichtigung gesendet';
@@ -518,6 +523,7 @@
       byId('watch-model').value = watch.model || '';
       byId('watch-variant').value = watch.variant || '';
       byId('watch-amazon-prime').checked = !!watch.amazon_prime;
+      byId('watch-item-price-alerts').checked = !!watch.alert_on_item_price;
       byId('watch-category').value = watch.category || '';
       byId('watch-manufacturer').value = watch.manufacturer || '';
       byId('watch-synonyms').value = (watch.synonyms || []).join(', ');
@@ -551,6 +557,7 @@
       byId('watch-model').value = offer.model || '';
       byId('watch-variant').value = offer.variant || '';
       byId('watch-amazon-prime').checked = !!offer.amazon_prime || offer.price_basis === 'prime';
+      byId('watch-item-price-alerts').checked = !!offer.alert_on_item_price;
       byId('watch-manufacturer').value = offer.manufacturer || '';
     }
     dialog.showModal();
@@ -594,6 +601,7 @@
       sellers_include: splitList(byId('watch-sellers-include').value), sellers_exclude: splitList(byId('watch-sellers-exclude').value),
       target_cents: target, max_price_cents: max, reference_max_price_cents: referenceMax,
       amazon_prime: sourceIds.includes('amazon') && byId('watch-amazon-prime').checked,
+      alert_on_item_price: byId('watch-item-price-alerts').checked,
       priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
       source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
     };
@@ -681,7 +689,8 @@
     const historyDialog = byId('history-dialog');
     byId('history-title').textContent = `Preisverlauf · ${offer.name || watch.name || 'Produkt'}`;
     const isReference = isReferenceOffer(offer);
-    byId('history-subtitle').textContent = isReference ? 'Referenzpreis ohne Versand · kein Händlerangebot und kein Gesamtpreis' : `${offer.merchant || offer.source || 'Quelle'}${offer.price_basis === 'prime' ? ' · Prime-Preis' : ''} · Gesamtpreis nur bei bekanntem Versand`;
+    const itemOnlyHistory = !isReference && offer.total_cents == null;
+    byId('history-subtitle').textContent = isReference ? 'Referenzpreis ohne Versand · kein Händlerangebot und kein Gesamtpreis' : `${offer.merchant || offer.source || 'Quelle'}${offer.price_basis === 'prime' ? ' · Prime-Preis' : ''} · ${itemOnlyHistory ? 'Artikelpreisverlauf · Versand unbekannt, Gesamtpreis offen' : 'Gesamtpreisverlauf bei bekanntem Versand'}`;
     const rows = byId('history-rows'); rows.replaceChildren();
     byId('history-chart').replaceChildren();
     try {
@@ -694,7 +703,7 @@
         values.forEach(value => row.append(el('td', '', value)));
         rows.append(row);
       }
-      renderChart(observations, isReference);
+      renderChart(observations, isReference, itemOnlyHistory);
       if (!observations.length) rows.append(emptyTableRow('Für dieses Angebot liegen noch keine gespeicherten Beobachtungen vor.'));
     } catch (error) { rows.append(emptyTableRow(`Verlauf konnte nicht geladen werden: ${error.message}`)); showChartNote('Verlauf konnte nicht geladen werden.'); }
     historyDialog.showModal();
@@ -711,17 +720,18 @@
     const svg = svgEl('svg', { viewBox: '0 0 700 220', role: 'img', 'aria-label': message });
     const text = svgEl('text', { x: 350, y: 112, 'text-anchor': 'middle', class: 'chart-note' }); text.textContent = message; svg.append(text); root.append(svg);
   }
-  function renderChart(observations, reference = false) {
-    const valueKey = reference ? 'price_cents' : 'total_cents';
-    const known = observations.filter(item => Number.isInteger(item[valueKey]) && item[valueKey] >= 0 && Number.isFinite(item.checked_at)).sort((a, b) => a.checked_at - b.checked_at);
-    if (known.length < 2) { showChartNote(known.length === 1 ? `${reference ? 'Eine Referenzpreis-' : 'Eine Gesamtpreis-'}beobachtung: Für einen Verlauf sind mindestens zwei nötig.` : `Noch keine ausreichenden Daten mit bekanntem ${reference ? 'Referenzpreis' : 'Gesamtpreis'}.`); return; }
+  function renderChart(observations, reference = false, itemOnly = false) {
+    const valueKey = reference || itemOnly ? 'price_cents' : 'total_cents';
+    const kind = reference ? 'Referenzpreis' : itemOnly ? 'Artikelpreis ohne Versand' : 'Gesamtpreis';
+    const known = observations.filter(item => (reference || (itemOnly ? item.total_cents == null : item.total_cents != null)) && Number.isInteger(item[valueKey]) && item[valueKey] >= 0 && Number.isFinite(item.checked_at)).sort((a, b) => a.checked_at - b.checked_at);
+    if (known.length < 2) { showChartNote(known.length === 1 ? `Eine ${kind}-Beobachtung: Für einen Verlauf sind mindestens zwei nötig.` : `Noch keine ausreichenden Daten für ${kind}.`); return; }
     const width = 700, height = 220, pad = { left: 64, right: 20, top: 20, bottom: 37 };
     const minT = known[0].checked_at, maxT = known[known.length - 1].checked_at;
     let minP = Math.min(...known.map(item => item[valueKey])), maxP = Math.max(...known.map(item => item[valueKey]));
     if (minP === maxP) { minP = Math.max(0, minP - 100); maxP += 100; }
     const x = (item) => pad.left + (maxT === minT ? .5 : (item.checked_at - minT) / (maxT - minT)) * (width - pad.left - pad.right);
     const y = (item) => pad.top + (1 - (item[valueKey] - minP) / (maxP - minP)) * (height - pad.top - pad.bottom);
-    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `Beobachteter ${reference ? 'Referenzpreis ohne Versand' : 'Gesamtpreis'} in ${known.length} Messungen; von ${fmtMoney(known[0][valueKey])} bis ${fmtMoney(known[known.length - 1][valueKey])}.` });
+    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `Beobachteter ${kind} in ${known.length} Messungen; von ${fmtMoney(known[0][valueKey])} bis ${fmtMoney(known[known.length - 1][valueKey])}.` });
     for (let i = 0; i < 4; i++) {
       const ratio = i / 3, gy = pad.top + ratio * (height - pad.top - pad.bottom);
       svg.append(svgEl('line', { x1: pad.left, x2: width - pad.right, y1: gy, y2: gy, class: 'chart-grid' }));
@@ -733,7 +743,7 @@
     svg.append(svgEl('polygon', { points: area, class: 'chart-area' }));
     svg.append(svgEl('polyline', { points, class: 'chart-line' }));
     known.forEach((item) => {
-      const circle = svgEl('circle', { cx: x(item), cy: y(item), r: 4.5, class: 'chart-point' }); circle.setAttribute('aria-label', `${fmtTime(item.checked_at)}: ${fmtMoney(item[valueKey])}${reference ? ' Referenzpreis ohne Versand' : ''}`); svg.append(circle);
+      const circle = svgEl('circle', { cx: x(item), cy: y(item), r: 4.5, class: 'chart-point' }); circle.setAttribute('aria-label', `${fmtTime(item.checked_at)}: ${fmtMoney(item[valueKey])} ${kind}`); svg.append(circle);
     });
     const first = svgEl('text', { x: pad.left, y: height - 11 }); first.textContent = fmtTime(minT, { dateStyle: 'short', timeStyle: undefined }); svg.append(first);
     const last = svgEl('text', { x: width - pad.right, y: height - 11, 'text-anchor': 'end' }); last.textContent = fmtTime(maxT, { dateStyle: 'short', timeStyle: undefined }); svg.append(last);
@@ -846,6 +856,10 @@
       buildSourceOptions(sources, discovery ? selected.filter(id => sources.find(source => source.id === id)?.supports_search !== false) : selected);
     }));
     byId('watch-search').addEventListener('input', event => { state.search = event.target.value; if (state.data) renderWatchList(state.data); });
+    byId('filter-unknown-shipping').addEventListener('change', event => {
+      state.showUnknownShipping = event.target.checked;
+      if (state.data) renderWatchList(state.data);
+    });
     byId('refresh-button').addEventListener('click', () => refresh(true));
     byId('activity-refresh').addEventListener('click', () => refresh(true));
     byId('setting-paused').addEventListener('change', event => updateSettings('paused', event.target.checked, event.target.checked ? 'Automatische Prüfungen pausiert.' : 'Automatische Prüfungen fortgesetzt.'));

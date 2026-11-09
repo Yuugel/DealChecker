@@ -18,3 +18,10 @@
 
 .prime-option{display:flex;align-items:center;gap:8px;grid-column:1/-1;font-size:11px;color:#526479}.prime-option input{width:16px;height:16px;flex:none;accent-color:#17b8c4}
 #watch-amazon-prime-field[hidden]{display:none}
+
+/* Compact offer-visibility control; the filter changes presentation only. */
+.filter-row{min-height:43px;height:auto;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:8px 14px;padding:4px 0}
+.filter-row .search-box{margin-left:auto}
+.shipping-visibility{display:inline-flex;align-items:center;gap:6px;font-size:10px;color:#55677a;cursor:pointer}
+.shipping-visibility input{accent-color:#159d9d;width:14px;height:14px}
+@media(max-width:650px){.filter-row .search-box{margin-left:0}.shipping-visibility{order:3;width:100%;font-size:9px}}
