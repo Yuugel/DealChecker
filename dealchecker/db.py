@@ -13,6 +13,11 @@ SCHEMA_VERSION = 8
 FEED_FRESH_SECONDS = 600
 
 
+def item_alert_key(offer_key: str) -> str:
+    """Separate article-only notifications from confirmed delivered totals."""
+    return offer_key + "|item"
+
+
 class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -427,13 +432,13 @@ class Database:
                                   "last_success": r["last_success"], "last_error": r["last_error"]}
                 for r in self.conn.execute("SELECT * FROM source_status")}
 
-    def prior(self, watch_id: int, key: str) -> tuple[list[dict], int | None, bool]:
+    def prior(self, watch_id: int, key: str, *, alert_key: str | None = None) -> tuple[list[dict], int | None, bool]:
         row = self.conn.execute("SELECT id FROM offers WHERE watch_id=? AND offer_key=?", (watch_id, key)).fetchone()
         if not row:
             return [], None, False
         history = self.history(row["id"])
         alert = self.conn.execute("SELECT total_cents FROM events WHERE watch_id=? AND offer_key=? ORDER BY id DESC LIMIT 1",
-                                  (watch_id, key)).fetchone()
+                                  (watch_id, alert_key if alert_key is not None else key)).fetchone()
         return history, alert[0] if alert else None, bool(alert)
 
     def record_check(self, watch_id: int, observations: list[tuple[Offer, str, int | None, int | None, str | None]],
@@ -461,15 +466,23 @@ class Database:
                 self.conn.execute("INSERT OR IGNORE INTO observations(offer_id,checked_at,price_cents,shipping_cents,total_cents,availability,provenance) VALUES(?,?,?,?,?,?,?)",
                                   (oid, item.checked_at, item.price_cents, item.shipping_cents, item.total_cents,
                                    item.availability, item.provenance))
-                if reason and item.total_cents is not None:
+                # events.total_cents is a legacy deduplication amount. For article-only
+                # alerts keep the JSON total_cents NULL; only alert_cents is the article price.
+                item_only = (item.total_cents is None and row.get("alert_on_item_price", False)
+                             and item.offer_type == "retail")
+                alert_amount = item.price_cents if item_only else item.total_cents
+                if reason and alert_amount is not None:
+                    event_key = item_alert_key(item.key) if item_only else item.key
                     event = {"product": item.name, "name": item.name, "merchant": item.merchant,
-                             "total_cents": item.total_cents, "comparison_cents": comparison,
+                             "total_cents": item.total_cents, "price_cents": item.price_cents,
+                             "alert_cents": alert_amount, "price_scope": "item" if item_only else "total",
+                             "shipping_cents": item.shipping_cents, "comparison_cents": comparison,
                              "savings_cents": savings, "url": item.url, "checked_at": item.checked_at,
                              "availability": item.availability, "reason": reason,
                              "source": item.source, "provenance": item.provenance, "quality": item.quality,
                              "price_basis": item.price_basis}
                     cur = self.conn.execute("INSERT OR IGNORE INTO events(watch_id,offer_key,total_cents,data,created_at,last_alerted_total) VALUES(?,?,?,?,?,?)",
-                                            (watch_id, item.key, item.total_cents, json.dumps(event), checked_at, item.total_cents))
+                                            (watch_id, event_key, alert_amount, json.dumps(event), checked_at, alert_amount))
                     if cur.rowcount and self.get_settings()["notification_enabled"]:
                         self.conn.execute("INSERT INTO outbox(event_id,next_due) VALUES(?,?)", (cur.lastrowid, checked_at))
             self.conn.execute("INSERT INTO checks(watch_id,checked_at,status,offers,error) VALUES(?,?,?,?,?)",
