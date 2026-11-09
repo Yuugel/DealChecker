@@ -180,7 +180,7 @@ class Database:
     def _watch(self, row):
         if row is None:
             return None
-        return {**json.loads(row["data"]), "id": row["id"], "next_due": row["next_due"],
+        return {"amazon_prime": False, **json.loads(row["data"]), "id": row["id"], "next_due": row["next_due"],
                 "failure_count": row["failure_count"], "last_error": row["last_error"],
                 "last_checked": row["last_checked"], "running": False}
 
@@ -367,6 +367,7 @@ class Database:
                 schedules[r["watch_id"]] = self.source_schedules(r["watch_id"])
             source = schedules[r["watch_id"]].get(data["source"])
             stale = (source is None or (source["last_checked"] is not None and r["seen_at"] < source["last_checked"])
+                     or (data.get("price_basis") == "prime" and not watch.get("amazon_prime", False))
                      or (source is not None and now >= source["next_due"]) or data.get("quality") == "feed_stale"
                      or (data.get("provenance") == "feed" and now - r["observed_at"] > FEED_FRESH_SECONDS)
                      or now - r["observed_at"] > 2 * interval(
@@ -465,7 +466,8 @@ class Database:
                              "total_cents": item.total_cents, "comparison_cents": comparison,
                              "savings_cents": savings, "url": item.url, "checked_at": item.checked_at,
                              "availability": item.availability, "reason": reason,
-                             "source": item.source, "provenance": item.provenance, "quality": item.quality}
+                             "source": item.source, "provenance": item.provenance, "quality": item.quality,
+                             "price_basis": item.price_basis}
                     cur = self.conn.execute("INSERT OR IGNORE INTO events(watch_id,offer_key,total_cents,data,created_at,last_alerted_total) VALUES(?,?,?,?,?,?)",
                                             (watch_id, item.key, item.total_cents, json.dumps(event), checked_at, item.total_cents))
                     if cur.rowcount and self.get_settings()["notification_enabled"]:

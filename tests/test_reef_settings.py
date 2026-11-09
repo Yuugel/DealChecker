@@ -111,9 +111,10 @@ def test_optional_sources_cannot_be_used_until_key_is_configured(tmp_path):
         state = client.get('/api/state').json()
         sources = {source['id']: source for source in state['sources']}
         assert sources['mediamarkt']['configured'] and sources['saturn']['configured']
-        assert not sources['amazon']['configured']
-        assert client.post('/api/links/resolve', json={'url': 'https://www.amazon.de/dp/B012345678'}).status_code == 422
-        assert client.post('/api/watches', json={'name': 'Synthetic', 'query': 'test', 'source_ids': ['amazon']}).status_code == 422
+        assert sources['amazon']['configured'] and sources['amazon']['supports_search']
+        assert not sources['ebay']['configured']
+        assert client.post('/api/links/resolve', json={'url': 'https://www.ebay.de/itm/123456789012'}).status_code == 422
+        assert client.post('/api/watches', json={'name': 'Synthetic', 'query': 'test', 'source_ids': ['ebay']}).status_code == 422
         client.put('/api/providers/reef', json={'api_key': KEY, 'delivery_postcode': '10115'})
         assert all(source['configured'] for source in client.get('/api/state').json()['sources'])
         assert client.get('/api/state').json()['reef']['delivery_postcode'] == '10115'

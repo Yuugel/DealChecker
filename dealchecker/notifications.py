@@ -21,6 +21,8 @@ class DiscordNotifier:
         total = event["total_cents"]
         price = f"{total // 100},{total % 100:02d} €"
         lines = [f"{event['reason']}: {event.get('product', event.get('name', 'Produkt'))} — {price} bei {event['merchant']}"]
+        if event.get('price_basis') == 'prime':
+            lines.append('Prime-Preis · Amazon-Prime-Mitgliedschaft erforderlich')
         if event.get("comparison_cents") is not None:
             cents = event["comparison_cents"]
             lines.append(f"Bisher beobachteter Vergleichspreis: {cents // 100},{cents % 100:02d} €")

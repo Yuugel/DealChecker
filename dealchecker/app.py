@@ -38,6 +38,7 @@ class SettingsPatch(BaseModel):
 class LinkInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     url: str = Field(min_length=1, max_length=1000)
+    amazon_prime: StrictBool = False
 
 
 class NotificationInput(BaseModel):
@@ -208,7 +209,7 @@ def create_app(config: Config | None = None, *, adapters=None, start_scheduler=T
     async def link_preview(payload: LinkInput):
         try:
             async with link_slots:
-                return await resolve_link(payload.url.strip(), app.state.registry)
+                return await resolve_link(payload.url.strip(), app.state.registry, amazon_prime=payload.amazon_prime)
         except (ValueError, RuntimeError, OSError) as exc:
             raise HTTPException(422, str(exc)[:300]) from None
 
