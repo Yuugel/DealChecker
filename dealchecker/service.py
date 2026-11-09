@@ -79,7 +79,11 @@ def _evaluate(watch: WatchInput, offer: Offer, history: list[dict], last_alert: 
     savings = max(0, comparison - amount) if comparison is not None and amount is not None else None
     if offer.offer_type == "reference":
         return "Referenzpreis", comparison, None, None
-    if amount is None or offer.availability != "in_stock":
+    if amount is None:
+        # Unknown shipping without opt-in cannot borrow a historical total
+        # and present that total as an article-price comparison.
+        return "Unzureichende Daten", None, None, None
+    if offer.availability != "in_stock":
         return "Unzureichende Daten", comparison, savings, None
     fresh = now - offer.checked_at <= 2 * interval_seconds and offer.checked_at <= now + 60 and offer.quality != "feed_stale"
     if offer.provenance == "feed" and now - offer.checked_at > FEED_FRESH_SECONDS:
