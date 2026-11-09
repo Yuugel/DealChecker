@@ -206,3 +206,23 @@ async def test_discord_notification_calls_it_article_price_not_delivered_total()
     assert "Gesamtpreis offen" in text
     assert "Bisher beobachteter Artikelpreis" in text
     assert "35,00 €" in text
+
+
+@pytest.mark.asyncio
+async def test_without_opt_in_unknown_shipping_cannot_relabel_old_total_as_item_comparison(tmp_path):
+    db = Database(tmp_path / "history-scopes.sqlite")
+    source = Shop(price=3000, shipping=500)
+    engine = Engine(db, {"shop": source})
+    wid = db.create_watch(watch(alert_on_item_price=False))["id"]
+    try:
+        await engine.check_watch(wid)
+        source.shipping = None
+        await engine.check_watch(wid)
+        [offer] = db.list_offers(wid)
+        assert offer["comparison_cents"] is None
+        assert offer["savings_cents"] is None
+        assert offer["evaluation"] == "Unzureichende Daten"
+        assert db.list_events() == []
+    finally:
+        await engine.close()
+        db.close()
