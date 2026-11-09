@@ -288,7 +288,7 @@
     heading.append(title);
     const actions = el('div', 'individual-offer-actions');
     const exact = el('button', 'small-action', 'Exakt beobachten'); exact.type = 'button';
-    exact.addEventListener('click', () => openWatchEditor(null, { ...offer, amazon_prime: watch.amazon_prime }));
+    exact.addEventListener('click', () => openWatchEditor(null, { ...offer, amazon_prime: watch.amazon_prime, alert_on_item_price: watch.alert_on_item_price }));
     actions.append(exact);
     const history = el('button', 'small-action', 'Verlauf');
     history.type = 'button';
@@ -523,6 +523,7 @@
       byId('watch-model').value = watch.model || '';
       byId('watch-variant').value = watch.variant || '';
       byId('watch-amazon-prime').checked = !!watch.amazon_prime;
+      byId('watch-item-price-alerts').checked = !!watch.alert_on_item_price;
       byId('watch-category').value = watch.category || '';
       byId('watch-manufacturer').value = watch.manufacturer || '';
       byId('watch-synonyms').value = (watch.synonyms || []).join(', ');
@@ -556,6 +557,7 @@
       byId('watch-model').value = offer.model || '';
       byId('watch-variant').value = offer.variant || '';
       byId('watch-amazon-prime').checked = !!offer.amazon_prime || offer.price_basis === 'prime';
+      byId('watch-item-price-alerts').checked = !!offer.alert_on_item_price;
       byId('watch-manufacturer').value = offer.manufacturer || '';
     }
     dialog.showModal();
@@ -599,6 +601,7 @@
       sellers_include: splitList(byId('watch-sellers-include').value), sellers_exclude: splitList(byId('watch-sellers-exclude').value),
       target_cents: target, max_price_cents: max, reference_max_price_cents: referenceMax,
       amazon_prime: sourceIds.includes('amazon') && byId('watch-amazon-prime').checked,
+      alert_on_item_price: byId('watch-item-price-alerts').checked,
       priority: byId('watch-priority').value, interval_seconds: interval, black_friday_interval_seconds: bfInterval,
       source_intervals: sourceIntervals, paused: byId('watch-paused').checked,
     };
@@ -686,7 +689,8 @@
     const historyDialog = byId('history-dialog');
     byId('history-title').textContent = `Preisverlauf · ${offer.name || watch.name || 'Produkt'}`;
     const isReference = isReferenceOffer(offer);
-    byId('history-subtitle').textContent = isReference ? 'Referenzpreis ohne Versand · kein Händlerangebot und kein Gesamtpreis' : `${offer.merchant || offer.source || 'Quelle'}${offer.price_basis === 'prime' ? ' · Prime-Preis' : ''} · Gesamtpreis nur bei bekanntem Versand`;
+    const itemOnlyHistory = !isReference && offer.total_cents == null;
+    byId('history-subtitle').textContent = isReference ? 'Referenzpreis ohne Versand · kein Händlerangebot und kein Gesamtpreis' : `${offer.merchant || offer.source || 'Quelle'}${offer.price_basis === 'prime' ? ' · Prime-Preis' : ''} · ${itemOnlyHistory ? 'Artikelpreisverlauf · Versand unbekannt, Gesamtpreis offen' : 'Gesamtpreisverlauf bei bekanntem Versand'}`;
     const rows = byId('history-rows'); rows.replaceChildren();
     byId('history-chart').replaceChildren();
     try {
@@ -699,7 +703,7 @@
         values.forEach(value => row.append(el('td', '', value)));
         rows.append(row);
       }
-      renderChart(observations, isReference);
+      renderChart(observations, isReference, itemOnlyHistory);
       if (!observations.length) rows.append(emptyTableRow('Für dieses Angebot liegen noch keine gespeicherten Beobachtungen vor.'));
     } catch (error) { rows.append(emptyTableRow(`Verlauf konnte nicht geladen werden: ${error.message}`)); showChartNote('Verlauf konnte nicht geladen werden.'); }
     historyDialog.showModal();
@@ -716,17 +720,18 @@
     const svg = svgEl('svg', { viewBox: '0 0 700 220', role: 'img', 'aria-label': message });
     const text = svgEl('text', { x: 350, y: 112, 'text-anchor': 'middle', class: 'chart-note' }); text.textContent = message; svg.append(text); root.append(svg);
   }
-  function renderChart(observations, reference = false) {
-    const valueKey = reference ? 'price_cents' : 'total_cents';
-    const known = observations.filter(item => Number.isInteger(item[valueKey]) && item[valueKey] >= 0 && Number.isFinite(item.checked_at)).sort((a, b) => a.checked_at - b.checked_at);
-    if (known.length < 2) { showChartNote(known.length === 1 ? `${reference ? 'Eine Referenzpreis-' : 'Eine Gesamtpreis-'}beobachtung: Für einen Verlauf sind mindestens zwei nötig.` : `Noch keine ausreichenden Daten mit bekanntem ${reference ? 'Referenzpreis' : 'Gesamtpreis'}.`); return; }
+  function renderChart(observations, reference = false, itemOnly = false) {
+    const valueKey = reference || itemOnly ? 'price_cents' : 'total_cents';
+    const kind = reference ? 'Referenzpreis' : itemOnly ? 'Artikelpreis ohne Versand' : 'Gesamtpreis';
+    const known = observations.filter(item => (reference || (itemOnly ? item.total_cents == null : item.total_cents != null)) && Number.isInteger(item[valueKey]) && item[valueKey] >= 0 && Number.isFinite(item.checked_at)).sort((a, b) => a.checked_at - b.checked_at);
+    if (known.length < 2) { showChartNote(known.length === 1 ? `Eine ${kind}-Beobachtung: Für einen Verlauf sind mindestens zwei nötig.` : `Noch keine ausreichenden Daten für ${kind}.`); return; }
     const width = 700, height = 220, pad = { left: 64, right: 20, top: 20, bottom: 37 };
     const minT = known[0].checked_at, maxT = known[known.length - 1].checked_at;
     let minP = Math.min(...known.map(item => item[valueKey])), maxP = Math.max(...known.map(item => item[valueKey]));
     if (minP === maxP) { minP = Math.max(0, minP - 100); maxP += 100; }
     const x = (item) => pad.left + (maxT === minT ? .5 : (item.checked_at - minT) / (maxT - minT)) * (width - pad.left - pad.right);
     const y = (item) => pad.top + (1 - (item[valueKey] - minP) / (maxP - minP)) * (height - pad.top - pad.bottom);
-    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `Beobachteter ${reference ? 'Referenzpreis ohne Versand' : 'Gesamtpreis'} in ${known.length} Messungen; von ${fmtMoney(known[0][valueKey])} bis ${fmtMoney(known[known.length - 1][valueKey])}.` });
+    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `Beobachteter ${kind} in ${known.length} Messungen; von ${fmtMoney(known[0][valueKey])} bis ${fmtMoney(known[known.length - 1][valueKey])}.` });
     for (let i = 0; i < 4; i++) {
       const ratio = i / 3, gy = pad.top + ratio * (height - pad.top - pad.bottom);
       svg.append(svgEl('line', { x1: pad.left, x2: width - pad.right, y1: gy, y2: gy, class: 'chart-grid' }));
@@ -738,7 +743,7 @@
     svg.append(svgEl('polygon', { points: area, class: 'chart-area' }));
     svg.append(svgEl('polyline', { points, class: 'chart-line' }));
     known.forEach((item) => {
-      const circle = svgEl('circle', { cx: x(item), cy: y(item), r: 4.5, class: 'chart-point' }); circle.setAttribute('aria-label', `${fmtTime(item.checked_at)}: ${fmtMoney(item[valueKey])}${reference ? ' Referenzpreis ohne Versand' : ''}`); svg.append(circle);
+      const circle = svgEl('circle', { cx: x(item), cy: y(item), r: 4.5, class: 'chart-point' }); circle.setAttribute('aria-label', `${fmtTime(item.checked_at)}: ${fmtMoney(item[valueKey])} ${kind}`); svg.append(circle);
     });
     const first = svgEl('text', { x: pad.left, y: height - 11 }); first.textContent = fmtTime(minT, { dateStyle: 'short', timeStyle: undefined }); svg.append(first);
     const last = svgEl('text', { x: width - pad.right, y: height - 11, 'text-anchor': 'end' }); last.textContent = fmtTime(maxT, { dateStyle: 'short', timeStyle: undefined }); svg.append(last);
@@ -851,6 +856,10 @@
       buildSourceOptions(sources, discovery ? selected.filter(id => sources.find(source => source.id === id)?.supports_search !== false) : selected);
     }));
     byId('watch-search').addEventListener('input', event => { state.search = event.target.value; if (state.data) renderWatchList(state.data); });
+    byId('filter-unknown-shipping').addEventListener('change', event => {
+      state.showUnknownShipping = event.target.checked;
+      if (state.data) renderWatchList(state.data);
+    });
     byId('refresh-button').addEventListener('click', () => refresh(true));
     byId('activity-refresh').addEventListener('click', () => refresh(true));
     byId('setting-paused').addEventListener('change', event => updateSettings('paused', event.target.checked, event.target.checked ? 'Automatische Prüfungen pausiert.' : 'Automatische Prüfungen fortgesetzt.'));
