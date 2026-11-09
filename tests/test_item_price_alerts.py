@@ -99,7 +99,6 @@ async def test_item_and_total_events_are_distinct_even_when_the_amount_matches(t
         source.shipping = None
         await engine.check_watch(wid)
         assert len(db.list_events()) == 2, "returning to unknown shipping is not a new event"
-        offer_key = Shop
         key = db.list_offers()[0]["key"]
         _, article_alert, _ = db.prior(wid, key, alert_key=item_alert_key(key))
         _, delivered_alert, _ = db.prior(wid, key)
@@ -158,7 +157,7 @@ async def test_opt_in_is_required_and_references_or_unavailable_items_never_aler
 
 
 def test_total_price_ceiling_remains_strict_even_with_item_alerts():
-    item = Offer(source="shop", merchant="Synthetic shop", product_id="demo",
+    item = Offer(source="shop", merchant="Synthetic shop", product_id="demo-item",
                  name="Example controller", url="https://example.com/demo",
                  price_cents=2900, shipping_cents=None, checked_at=time.time(), availability="in_stock")
     assert _matches(watch(), item)
